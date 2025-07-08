@@ -2,7 +2,8 @@ import os
 from dotenv import load_dotenv
 from pathlib import Path
 from openai import OpenAI
-from models import LLM_I
+from models import LLM_I, LLM_O
+import json
 
 ENV_DIR = Path(__file__).resolve().parent.parent
 ENV_PATH = ENV_DIR / ".env"
@@ -125,7 +126,7 @@ RULES
 
 ############################
 
-def CALL(payload: LLM_I)->dict:
+def CALL(payload: LLM_I)->LLM_O:
     USER_PROMPT = str(payload)
 
     MESSAGES = [{"role": "system", "content": SYSTEM_PROMPT_1},
@@ -140,5 +141,6 @@ def CALL(payload: LLM_I)->dict:
         }    
     )
 
-    RESPONSE = response.choices[0].message.content    
-    return RESPONSE
+    RESPONSE:str = response.choices[0].message.content
+
+    return json.loads(RESPONSE)

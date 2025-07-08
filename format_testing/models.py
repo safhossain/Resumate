@@ -9,11 +9,13 @@ class MOD_DEG(Enum):
 
 class LLM_I(TypedDict):
     full_resume:str
-    placeholders:dict
+    placeholders:dict[str, str]
     mod_deg:MOD_DEG
     faux:bool
     job_posting:str
     acc:str
 
 class LLM_O(TypedDict):
-    placeholders:dict
+    placeholders: dict[str, str]
+    changes_made: str
+    
