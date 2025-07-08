@@ -1,0 +1,8 @@
+.env
+__pycache__/
+resources/
+clipboard.txt
+templates
+main.log
+main.pdf
+main.tex
