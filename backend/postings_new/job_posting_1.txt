@@ -1,0 +1,123 @@
+Full Stack Software Engineer, TD Securities
+
+ Hybrid
+
+locations Toronto, Ontario
+
+time type Full time
+
+posted on Posted 4 Days Ago
+
+time left to apply End Date: July 30, 2025 (22 days left to apply)
+
+job requisition id R_1429716 Work Location: Toronto, Ontario, Canada
+
+Hours: 37.5
+
+Line of Business: Technology Solutions
+
+Pay Details: $125,000 - $156,000 CAD
+
+This role is eligible for a discretionary variable compensation award that considers business and individual performance.
+
+TD is committed to providing fair and equitable compensation opportunities to all colleagues. Growth opportunities and skill development are defining features of the colleague experience at TD. Our compensation policies and practices have been designed to allow colleagues to progress through the salary range over time as they progress in their role. The base pay actually offered may vary based upon the candidate's skills and experience, job-related knowledge, geographic location, and other specific business and organizational needs.
+
+As a candidate, you are encouraged to ask compensation related questions and have an open dialogue with your recruiter who can provide you more specific details for this role.
+
+Job Description: Department Overview
+
+The TDS Data team is the tasked with establishing a high quality, scalable and resilient data platform. The Data Platform will also the strategic storage and compute infrastructure for numerous business-aligned products used by front office users as well as risk management functions in the Investment Bank. Within the wider platform team, the TDS Data Masters team is responsible for providing golden source (that's trustable, reliable and on-time) access to Reference Data information and is responsible for ensuring automated auto creation and modification of reference data in trading systems.
+
+Job description
+
+We are looking for a savvy Full Stack Software Engineer (Engineer II) to join our growing team of engineers. The hire will be responsible for maintaining our current our data master space and be a key contributor as we design the next generation of cloud native data and analytics platform. 
+
+The ideal candidate is an experienced both front end and backend development to build components that support our masters suite of applications. They have experience building concise and user-friendly interfaces as well as the microservices to support those UI capabilities. They must be self-directed and comfortable supporting the data needs of multiple teams, systems, and products.
+
+Responsibilities:
+
+ Develop backend services or data pipelines for stability, performance and scalability.
+
+ Create and maintain our UI applications and its supporting microservices.
+
+ Provide technical support to promptly resolve escalated incidents/outages.
+
+ Develop and document a detailed solution design, impart your subject matter expertise throughout life cycle.
+
+ Take business, Enterprise Architecture, system performance and development standards requirements, then develop functional, technical and user interface designs for an application and/or system.
+
+ Conduct code reviews to address quality, standards compliance, reusability and ease of maintenance, Operational Readiness Reviews, and support gating and review sign-offs for solution design.
+
+ Ensure design leverages existing reusable components, traces back to business requirements, and that new modules are designed with reusability in mind.
+
+ Keep up to date with the latest industry trends and technologies related to data engineering.
+
+Qualifications
+
+ Undergraduate Degree.
+
+ 9+ years of relevant experience in a related field of job function.
+
+ 5+ years expericne in React and/or Angular.
+
+ Experience with Java, Java Streams API Spring, SpringBoot with relational SQL and noSQL databases.
+
+ Experience with Messaging queues: MQ, Kafka, Solace
+
+ Experience with React, CSS3, HTML, JavaScript, Node JS, Bootstrap
+
+ Experience designing production grade, scalable applications and microservices. 
+
+ Experience working on Agile Teams
+
+ Capital Markets experience, particularly in Reference Data Management, Data lifecycle
+
+Desired Interpersonal Skills
+
+ Takes great personal pride in building robust software.
+
+ Strong sense of ownership and customer focus
+
+ Passionate about programming and computer science
+
+ Enjoys working in a fast-paced environment.
+
+ Has excellent written and verbal communication skills
+
+Additional Information :
+
+
+
+Join in on what others in TD Technology Solutions are doing:
+
+ Inspire a positive work environment and help champion quality, innovation, teamwork and service to the business.
+
+ Learn voraciously, stretch your thinking, share your knowledge and educate others.
+
+ Communicate and collaborate with both technical and non-technical professionals.
+
+ Cultivate winning relationships by building trust with business and technology partners.
+
+ Share our commitment to productivity, effectiveness and operational efficiency.
+
+#LI-Tech
+
+Who We Are:
+
+TD Securities offers a wide range of capital markets products and services to corporate, government, and institutional clients who choose us for our innovation, execution, and experience. With more than 6,500 professionals operating out of 40 cities across the globe, we help clients meet their needs today and prepare for tomorrow. Our services include underwriting and distributing new issues, providing trusted advice and industry-leading insight, extending access to global markets, and delivering integrated transaction banking solutions. In 2023, we acquired Cowen Inc., offering our clients access to a premier U.S. equities business and highly-diverse equity research franchise, while growing our strong, diversified investment bank. We are growth-oriented, people-focused, and community-minded. As a team, we work to deliver value for our clients every day.
+
+Our Total Rewards Package Our Total Rewards package reflects the investments we make in our colleagues to help them and their families achieve their financial, physical, and mental well-being goals. Total Rewards at TD includes a base salary, variable compensation, and several other key plans such as health and well-being benefits, savings and retirement programs, paid time off, banking benefits and discounts, career development, and reward and recognition programs. Learn more
+
+Additional Information: We’re delighted that you’re considering building a career with TD. Through regular development conversations, training programs, and a competitive benefits plan, we’re committed to providing the support our colleagues need to thrive both at work and at home.
+
+Please be advised that this job opportunity is subject to provincial regulation for employment purposes. It is imperative to acknowledge that each province or territory within the jurisdiction of Canada may have its own set of regulations, requirements.
+
+Colleague Development If you’re interested in a specific career path or are looking to build certain skills, we want to help you succeed. You’ll have regular career, development, and performance conversations with your manager, as well as access to an online learning platform and a variety of mentoring programs to help you unlock future opportunities. Whether you have a passion for helping customers and want to expand your experience, or you want to coach and inspire your colleagues, there are many different career paths within our organization at TD – and we’re committed to helping you identify opportunities that support your goals. 
+
+Training & Onboarding We will provide training and onboarding sessions to ensure that you’ve got everything you need to succeed in your new role.
+
+Interview Process We’ll reach out to candidates of interest to schedule an interview. We do our best to communicate outcomes to all applicants by email or phone call.
+
+Accommodation Your accessibility is important to us. Please let us know if you’d like accommodations (including accessible meeting rooms, captioning for virtual interviews, etc.) to help us remove barriers so that you can participate throughout the interview process.
+
+We look forward to hearing from you!
