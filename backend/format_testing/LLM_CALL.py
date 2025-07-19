@@ -5,7 +5,7 @@ from openai import OpenAI
 from models import LLM_I, LLM_O
 import json
 
-ENV_DIR = Path(__file__).resolve().parent.parent
+ENV_DIR = Path(__file__).resolve().parent
 ENV_PATH = ENV_DIR / ".env"
 load_dotenv(ENV_PATH)
 API_KEY = os.getenv('DEEPSEEK_KEY')
