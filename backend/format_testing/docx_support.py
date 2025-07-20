@@ -5,21 +5,20 @@ from docxtpl import DocxTemplate
 from re import search
 import time
 from pathlib import Path
+import shutil
 
 def get_full_resume_from_docx(path:str)->str:
     return docx2txt.process(path)
 
 def post_llm_process_docx(res_path: Union[str, PathLike], context)->None:
-    RESUME_PATH = res_path
+    orig = Path(res_path)
+    timestamp = int(time.time())    
+    working_copy = orig.with_name(f"{orig.stem}_{timestamp}{orig.suffix}")
+    shutil.copy2(orig, working_copy)
 
-    doc = DocxTemplate(RESUME_PATH)
+    doc = DocxTemplate(working_copy)
     doc.init_docx()
-
-    orig        = Path(RESUME_PATH)
-    timestamp   = int(time.time())
-    new_name    = f"{orig.stem}_{timestamp}{orig.suffix}"
-    output_path = orig.with_name(new_name)
-
+   
     def render_fully(doc:DocxTemplate, context, max_passes=10):
         for _i in range(max_passes):
             xml = doc.get_xml()
@@ -27,11 +26,11 @@ def post_llm_process_docx(res_path: Union[str, PathLike], context)->None:
                 break
             doc.render(context)
             try:
-                doc.save(output_path)
+                doc.save(working_copy)
             except Exception as e:
-                print(f"Save failed: {e}")
+                print(f"Save-after-render failed: {e}")
             else:
-                print(f"Saved -> {output_path}")
+                print(f"Save-after-render good -> {working_copy}")
         else:
             raise RuntimeError("Too many nested rendering passes")
 
