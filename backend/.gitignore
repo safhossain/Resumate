@@ -1,7 +1,7 @@
 __pycache__/
 resources/
+outputs/
+templates/
 clipboard.txt
-templates
-main.log
-main.pdf
-main.tex
+sensitive_fields.json
+fields.json
