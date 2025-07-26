@@ -1,6 +1,5 @@
 from enum import Enum
 from typing import TypedDict, Literal
-import json
 
 class MOD_DEG(Enum):
     LOW = "low"

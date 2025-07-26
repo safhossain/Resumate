@@ -1,0 +1,59 @@
+Application Engineer – III
+
+Location(s) Charlotte, NC, US
+
+Work model Hybrid
+
+Are you passionate about innovative technology, building scalable and intuitive client experiences, and problem-solving? Are you experienced with frontend technologies like Angular and Typescript? If so, consider the Profile & Account Settings sub-family within PiTech Core Journey's. You will join an experienced team of other Application Engineers and play a key role in modernizing unique client journey's. In this position, you will work with UX specialists to build dynamic UI's, solve complex problems to scale our audience, and integrate with different technologies and API's
+
+
+
+Core Responsibilities:
+
+    Provides senior level system analysis, design, development, and implementation of applications and databases. Integrates third party products.
+
+    Translates technical specifications into code for complex new or enhancement projects for internal clients. Writes programs, develops code, tests artifacts, and produces reports. Employs software development techniques to ensure tests are implemented in a way that support automation.
+
+    Elevates code into the development, test, and production environments on schedule. Provides follow up production support. Submits change control requests and documents.
+
+    Thoroughly understands software development methodology. Thoroughly understands development architecture standards. Trains and mentors staff with less experience. Resolves elevated issues.
+
+    Participates in design, code, and test inspections throughout the life cycle to identify issues. Explains technical considerations at related meetings, including those with internal clients. Performs systems analysis activities.
+
+    Thoroughly understands client business functions and technology needs. Has a broad understanding of Vanguards technologies, tools, and applications, including those that interface with business area and systems.
+
+    Interfaces with cross functional team members, and communicates systems issues at the appropriate technical level for each audience.
+
+    Thoroughly understands and complies with Information Technology and Information Security policies and procedures, and verifies that deliverables meet requirements.
+
+    Participates in special projects and performs other duties as assigned.
+
+Qualifications:
+
+    5 years related work experience with development within front end technologies: (Angular, Node, Typescript, AWS, Jest etc…)
+
+    Strong stakeholder experience
+
+Preferences:
+
+    Experience with Java and API's, AEM, Honeycomb/Splunk, Cloudformation, IAM Prioritization of defects, features, and tech debt.
+
+    Experience with research and strong analytical skills
+
+Special Factors
+
+Sponsorship
+
+Vanguard is not offering visa sponsorship for this position.
+
+About Vanguard
+
+At Vanguard, we don't just have a mission—we're on a mission.
+
+To work for the long-term financial wellbeing of our clients. To lead through product and services that transform our clients' lives. To learn and develop our skills as individuals and as a team. From Malvern to Melbourne, our mission drives us forward and inspires us to be our best.
+
+How We Work
+
+Vanguard has implemented a hybrid working model for the majority of our crew members, designed to capture the benefits of enhanced flexibility while enabling in-person learning, collaboration, and connection. We believe our mission-driven and highly collaborative culture is a critical enabler to support long-term client outcomes and enrich the employee experience.
+
+

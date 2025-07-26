@@ -8,8 +8,8 @@ from file_type_base import FileType
 
 class TXTf(FileType):
     
-    def get_full_resume(self, path:str)->str:
-        with open(path, 'r', encoding='utf-8') as f:
+    def get_resume_str(self, res_path:Union[str, PathLike])->str:
+        with open(res_path, 'r', encoding='utf-8') as f:
             r = f.read()
         return r
     

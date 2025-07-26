@@ -1,5 +1,5 @@
 from os import PathLike
-from typing import Union, Optional
+from typing import Union, Optional, Dict
 import docx2txt
 from docxtpl import DocxTemplate
 from re import search
@@ -10,10 +10,10 @@ import shutil
 from file_type_base import FileType
 
 class DOCXf(FileType):
-    def get_full_resume(self, path:str)->str:
-        return docx2txt.process(path)
+    def get_resume_str(self, res_path:str)->str:
+        return docx2txt.process(res_path)
 
-    def post_llm_process(self, res_path: Union[str, PathLike], context, output_dir: Optional[Union[str, PathLike]] = None)->None:
+    def post_llm_process(self, res_path: Union[str, PathLike], context: Dict[str, str], output_dir: Optional[Union[str, PathLike]] = None)->None:
         orig =  Path(res_path)
         if output_dir is not None:
             dest_dir = Path(output_dir)

@@ -2,7 +2,7 @@ import os
 from dotenv import load_dotenv
 from pathlib import Path
 from openai import OpenAI
-from models import LLM_I, LLM_O
+from contracts import LLM_I, LLM_O
 import json
 
 ENV_DIR = Path(__file__).resolve().parent

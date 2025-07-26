@@ -8,7 +8,7 @@ from file_type_base import FileType
 
 class PDFf(FileType):
     
-    def get_full_resume(self, path:str)->str:
+    def get_resume_str(self, path:str)->str:
         pass #FIX: to implement
     
     def post_llm_process(self, res_path: Union[str, PathLike], context, output_dir: Optional[Union[str, PathLike]] = None)->None:
