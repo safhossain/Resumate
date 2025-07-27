@@ -4,10 +4,10 @@ from os import PathLike
 import time
 
 from file_type_base import FileType
-from jinja2_pdflatex import gen_tex, gen_pdf
+from jinja2_render import render_and_generate
+from tex_to_pdf import gen_pdf
 
-class J2f(FileType):
-    
+class J2f(FileType):    
     def get_resume_str(self, res_path:Union[str, PathLike])->str:
         with open(res_path, 'r', encoding='utf-8') as f:
             j2_str = f.read()
@@ -32,5 +32,5 @@ class J2f(FileType):
         base_name = orig.name[:-len(all_suffixes)] if all_suffixes else orig.stem
         new_name = Path(f"{base_name}_{timestamp}{all_suffixes}").stem
         working_copy = dest_dir / new_name
-        gen_tex(context, res_path, working_copy)
+        render_and_generate(context, res_path, working_copy)
         gen_pdf(working_copy)
