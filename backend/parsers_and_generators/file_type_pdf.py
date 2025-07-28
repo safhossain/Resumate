@@ -1,6 +1,6 @@
-from os import PathLike
 from typing import Union, Optional
 from pathlib import Path
+from os import PathLike
 import time
 import shutil
 
@@ -8,7 +8,7 @@ from file_type_base import FileType
 
 class PDFf(FileType):
     
-    def get_resume_str(self, path:str)->str:
+    def get_resume_str(self, res_path: Union[str, PathLike])->str:
         pass #FIX: to implement
     
     def post_llm_process(self, res_path: Union[str, PathLike], context, output_dir: Optional[Union[str, PathLike]] = None)->None:

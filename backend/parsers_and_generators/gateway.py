@@ -8,13 +8,14 @@ from contracts import LLM_I, MOD_DEG, LLM_O
 from LLM_CALL import CALL
 
 from file_type_base import FileType
-from file_type_docx import DOCXf
 from file_type_txt_j2 import TXTf
-from file_type_pdf import PDFf
 from file_type_tex_j2 import J2f
+from file_type_docx import DOCXf
+from file_type_pdf import PDFf
 
 GATEWAY_DIR         = Path(__file__).resolve().parent
-RESUME_PATH         = (GATEWAY_DIR / '..' / 'templates' / 'resume' / 'BASE_RESUME_TEMPL.txt.j2').resolve()
+RESUME_NAME:str     = ''
+RESUME_PATH         = (GATEWAY_DIR / '..' / 'templates' / 'resume' / RESUME_NAME).resolve()
 PLACEHOLDERS_PATH   = (GATEWAY_DIR / '..' / 'fields.json').resolve()
 JOB_POSTING_PATH    = (GATEWAY_DIR / '..' / 'postings_new' / 'job_posting_2.txt').resolve()
 ACC_PATH            = (GATEWAY_DIR / '..' / 'resources' / 'ACC.txt').resolve()
@@ -57,16 +58,16 @@ def main(opcode):
     ft:FileType = None
     suffixes = [s.lower() for s in RESUME_PATH.suffixes]
     if suffixes[-2:] == ['.tex', '.j2']:
-        ft = J2f()
+        ft = J2f(RESUME_PATH, OUTPUT_DIR)
     elif suffixes[-1] in {'.doc', '.docx'}:
-        ft = DOCXf()
+        ft = DOCXf(RESUME_PATH, OUTPUT_DIR)
     elif suffixes[-2:] == ['.txt', '.j2']:
-        ft = TXTf()
+        ft = TXTf(RESUME_PATH, OUTPUT_DIR)
     elif suffixes[-1] == '.pdf':
         ft = PDFf()
     else:
         raise ValueError("Resume file must be one of: .docx, .doc, .txt.j2, .pdf, or .tex.j2")
-    FULL_RESUME_STR = ft.get_resume_str(RESUME_PATH)
+    FULL_RESUME_STR = ft.get_resume_str()
 
     #print(FULL_RESUME_STR)
 
@@ -109,12 +110,13 @@ def main(opcode):
     '''
     context = resolve_placeholders(context)
 
-    ft.post_llm_process(RESUME_PATH, context, OUTPUT_DIR)
+    ft.post_llm_process(context)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Choose to make an LLM call or not"
+        description="Choose to make an LLM call or not and which template format to use"
     )
+
     group = parser.add_mutually_exclusive_group()
     group.add_argument(
         "-c", "--call",
@@ -129,7 +131,26 @@ if __name__ == "__main__":
         help="LLM call NOT performed"
     )
     parser.set_defaults(do_call=True)
+
+    parser.add_argument(
+        "-f", "--format",
+        dest="template_format",
+        choices=["doc", "tex", "txt", "pdf"],
+        default="doc",
+        help="Resume template formats to use"
+    )
+
     args = parser.parse_args()
+
+    TEMPLATE_MAP = {
+        "doc": "BASE_RESUME_TEMPL.docx",
+        "tex": "BASE_RESUME_TEMPL.tex.j2",
+        "txt": "BASE_RESUME_TEMPL.txt.j2",
+        "pdf": "BASE_RESUME_TEMPL.pdf",
+    } 
+    RESUME_NAME = TEMPLATE_MAP[args.template_format]
+    RESUME_PATH = (GATEWAY_DIR / ".." / "templates" / "resume" / RESUME_NAME).resolve()
+
     if args.do_call:
         main(0)
     else:

@@ -1,39 +1,28 @@
-from os import PathLike
-from typing import Union, Optional, Dict
-import docx2txt
 from docxtpl import DocxTemplate
-from re import search
-import time
-from pathlib import Path
+from typing import Dict
+import docx2txt
 import shutil
+import time
 
 from file_type_base import FileType
 
 class DOCXf(FileType):
-    def get_resume_str(self, res_path:str)->str:
-        return docx2txt.process(res_path)
+    def get_resume_str(self)->str:
+        return docx2txt.process(self.res_path)
 
-    def post_llm_process(self, res_path: Union[str, PathLike], context: Dict[str, str], output_dir: Optional[Union[str, PathLike]] = None)->None:
-        orig =  Path(res_path)
-        if output_dir is not None:
-            dest_dir = Path(output_dir)
-        else:
-            dest_dir = orig.parent
-        try:
-            dest_dir.mkdir(parents=True, exist_ok=True)
-        except Exception as e:
-            print(f"destination folder dne: {e}")
-        else:
-            pass
+    def post_llm_process(self, context: Dict[str, str])->None:        
+        self.context = context
+
+        orig = self.res_path
         timestamp = int(time.time())
         new_name = f"{orig.stem}_{timestamp}{orig.suffix}"
-        working_copy = dest_dir / new_name
+        working_copy = self.dest_dir / new_name
         shutil.copy2(orig, working_copy)
 
         doc = DocxTemplate(working_copy)
         doc.init_docx()
         
-        doc.render(context)
+        doc.render(self.context)
         try:
             doc.save(working_copy)
         except OSError as e:
