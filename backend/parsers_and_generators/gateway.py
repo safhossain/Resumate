@@ -1,9 +1,9 @@
-from typing import Dict, Optional
 from pathlib import Path
+from typing import Dict
 import argparse
 import json
-import re
 
+from context_helpers import resolve_placeholders
 from contracts import LLM_I, MOD_DEG, LLM_O
 from LLM_CALL import CALL
 
@@ -22,27 +22,13 @@ ACC_PATH            = (GATEWAY_DIR / '..' / 'resources' / 'ACC.txt').resolve()
 SENSITIVE_PATH      = (GATEWAY_DIR / '..' / 'sensitive_fields.json').resolve()
 OUTPUT_DIR          = (GATEWAY_DIR / '..' / 'outputs' ).resolve()
 
-def resolve_placeholders(ctx: Dict[str, Optional[str]], max_passes=5):
-    # Note: LLM-generated
-    """
-    Repeatedly replace {{KEY}} in each ctx[value] with ctx[KEY], until
-    no more changes occur (or max_passes is reached).
-    """
-    pattern = re.compile(r"{{\s*([\w]+)\s*}}")
-    for _ in range(max_passes):
-        changed = False
-        for k, v in list(ctx.items()):
-            if not isinstance(v, str):
-                continue
-            def repl(m):
-                return ctx.get(m.group(1), "")
-            new_v = pattern.sub(repl, v)
-            if new_v != v:
-                ctx[k] = new_v
-                changed = True
-        if not changed:
-            break
-    return ctx
+HANDLERS: dict[tuple[str, ...], type[FileType]] = {
+    ('.tex', '.j2'):    J2f,
+    ('.txt', '.j2'):    TXTf,
+    ('.doc',):          DOCXf,
+    ('.docx',):         DOCXf,
+    ('.pdf',):          PDFf,
+}
 
 def main(opcode):
     with open(PLACEHOLDERS_PATH) as f:
@@ -53,22 +39,18 @@ def main(opcode):
         ACC = f.read()
     with open(SENSITIVE_PATH) as f:
         sensitive_fields = json.load(f)
-
-    # get full resume in string form depending on file type
-    ft:FileType = None
-    suffixes = [s.lower() for s in RESUME_PATH.suffixes]
-    if suffixes[-2:] == ['.tex', '.j2']:
-        ft = J2f(RESUME_PATH, OUTPUT_DIR)
-    elif suffixes[-1] in {'.doc', '.docx'}:
-        ft = DOCXf(RESUME_PATH, OUTPUT_DIR)
-    elif suffixes[-2:] == ['.txt', '.j2']:
-        ft = TXTf(RESUME_PATH, OUTPUT_DIR)
-    elif suffixes[-1] == '.pdf':
-        ft = PDFf()
-    else:
+    
+    # determine file-handler type
+    suffixes = tuple(s.lower() for s in RESUME_PATH.suffixes)    
+    key = suffixes[-2:] if suffixes[-2:] in HANDLERS else (suffixes[-1],)    
+    try:
+        Handler = HANDLERS[key]
+    except KeyError:
         raise ValueError("Resume file must be one of: .docx, .doc, .txt.j2, .pdf, or .tex.j2")
-    FULL_RESUME_STR = ft.get_resume_str()
 
+    ft = Handler(RESUME_PATH, OUTPUT_DIR)
+
+    FULL_RESUME_STR = ft.get_resume_str()
     #print(FULL_RESUME_STR)
 
     # Get LLM-modified field placeholders: file type agonstic
@@ -93,7 +75,6 @@ def main(opcode):
     #Load context with sensitive data placeholders + new LLM-output field placeholders
     context:Dict[str, str] = dict(sensitive_fields)
     context.update(mod_fields)
-
     '''
         Warning: Recursive {{ PLACEHOLDERS }}
 

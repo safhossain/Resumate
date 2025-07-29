@@ -5,13 +5,14 @@ import shutil
 import time
 
 from file_type_base import FileType
+from context_helpers import escape_chars
 
 class DOCXf(FileType):
     def get_resume_str(self)->str:
         return docx2txt.process(self.res_path)
 
     def post_llm_process(self, context: Dict[str, str])->None:        
-        self.context = context
+        self.context = escape_chars(context, "docx")
 
         orig = self.res_path
         timestamp = int(time.time())
