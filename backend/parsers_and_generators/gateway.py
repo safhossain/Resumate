@@ -133,6 +133,7 @@ if __name__ == "__main__":
     RESUME_PATH = (GATEWAY_DIR / ".." / "templates" / "resume" / RESUME_NAME).resolve()
 
     if args.do_call:
+        print("Calling ...\n")
         main(0)
     else:
         main(1)

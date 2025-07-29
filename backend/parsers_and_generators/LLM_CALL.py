@@ -1,9 +1,10 @@
-import os
 from dotenv import load_dotenv
-from pathlib import Path
 from openai import OpenAI
-from contracts import LLM_I, LLM_O
+from pathlib import Path
 import json
+import os
+
+from contracts import LLM_I, LLM_O
 
 ENV_DIR = Path(__file__).resolve().parent
 ENV_PATH = ENV_DIR / ".env"
@@ -108,7 +109,7 @@ MOD_DEG
 
 FAUX
     false - restrict additions/edits to skills and experience already in placeholders or ACC
-    true  - introduce new skills or experience implied by the job posting, amount is subject to mod_deg value
+    true  - introduce new skills or experience implied by the job posting, amount is subject to mod_deg value; you should try to update not just for technical skills but possibly (if viable) Project and Work sections
 
 OUTPUT
 Return exactly:
@@ -122,6 +123,13 @@ RULES
 - Leave all other {{ VARIABLE }} tokens untouched for .env substitution.
 - Preserve any nested {{ PLACEHOLDER }} expressions verbatim.
 - Use ACC only when it adds relevant details to meet the job requirements.
+
+IMPORTANT JSON RULES:
+1. Output **only** valid, strict JSON (RFC 8259).
+2. **Always** use double quotes (") for keys and string values.
+3. **Never** use single quotes to delimit keys or values.
+4. If a value contains a double quote, convert it to a single quote (').
+5. Do not include comments, trailing commas, or any non JSON syntax.
 '''
 
 ############################
@@ -142,5 +150,6 @@ def CALL(payload: LLM_I)->LLM_O:
     )
 
     RESPONSE:str = response.choices[0].message.content
+    #print(f"*-*-*-*-*-*-*-*-\n{RESPONSE}\n*-*-*-*-*-*-*-*-")
 
     return json.loads(RESPONSE)
