@@ -1,7 +1,8 @@
 Jinja2
 python-dotenv
-pdflatex
 python-docx
 docx2txt
 docxtpl
 openai
+anthropic
+google-genai

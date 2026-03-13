@@ -1,1 +1,10 @@
-.env
+**/.env
+**/.env.*
+**/__pycache__/
+backend/outputs/
+backend/postings_new/
+backend/resources/
+backend/templates/
+backend/clipboard.txt
+backend/fields.json
+backend/sensitive_fields.json

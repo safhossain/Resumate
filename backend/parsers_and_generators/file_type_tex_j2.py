@@ -1,8 +1,8 @@
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Optional
 import time
 
-from file_type_base import FileType
+from file_type_base import FileType, build_output_tag
 from jinja2_render import render_and_generate
 from tex_to_pdf import gen_pdf
 
@@ -13,14 +13,15 @@ class J2f(FileType):
             j2_str = f.read()
         return j2_str
     
-    def post_llm_process(self, context: Dict[str, str])->None:
+    def post_llm_process(self, context: Dict[str, str], metadata: Optional[dict] = None)->None:
         self.context = context
 
         orig =  self.res_path 
         timestamp = int(time.time())
+        tag = build_output_tag(metadata)
         all_suffixes = "".join(orig.suffixes)
         base_name = orig.name[:-len(all_suffixes)] if all_suffixes else orig.stem
-        new_name = Path(f"{base_name}_{timestamp}{all_suffixes}").stem
+        new_name = Path(f"{base_name}{tag}_{timestamp}{all_suffixes}").stem
         working_copy = self.dest_dir / new_name
         
         render_and_generate(self.context, self.res_path, working_copy)

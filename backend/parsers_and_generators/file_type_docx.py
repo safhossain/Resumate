@@ -1,22 +1,23 @@
 from docxtpl import DocxTemplate
-from typing import Dict
+from typing import Dict, Optional
 import docx2txt
 import shutil
 import time
 
-from file_type_base import FileType
+from file_type_base import FileType, build_output_tag
 from context_helpers import escape_chars
 
 class DOCXf(FileType):
     def get_resume_str(self)->str:
         return docx2txt.process(self.res_path)
 
-    def post_llm_process(self, context: Dict[str, str])->None:        
+    def post_llm_process(self, context: Dict[str, str], metadata: Optional[dict] = None)->None:        
         self.context = escape_chars(context, "docx")
 
         orig = self.res_path
         timestamp = int(time.time())
-        new_name = f"{orig.stem}_{timestamp}{orig.suffix}"
+        tag = build_output_tag(metadata)
+        new_name = f"{orig.stem}{tag}_{timestamp}{orig.suffix}"
         working_copy = self.dest_dir / new_name
         shutil.copy2(orig, working_copy)
 

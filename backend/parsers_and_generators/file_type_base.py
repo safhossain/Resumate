@@ -3,6 +3,18 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from os import PathLike
 
+
+def build_output_tag(metadata: Optional[dict]) -> str:
+    """Return the _model_posting_moddeg_faux segment for output filenames."""
+    if not metadata:
+        return ""
+    model   = (metadata.get("model") or "NA").replace("/", "-")
+    posting = Path(metadata.get("posting", "")).stem or "NA"
+    moddeg  = metadata.get("moddeg", "NA")
+    faux    = "faux" if metadata.get("faux") else "nofaux"
+    return f"_{model}_{posting}_{moddeg}_{faux}"
+
+
 class FileType(ABC):
     res_path: Path
     output_dir: Path
@@ -25,10 +37,7 @@ class FileType(ABC):
             pass
 
     @abstractmethod
-    def get_resume_str(self, res_path:Union[str, PathLike])->str: ...
+    def get_resume_str(self) -> str: ...
 
     @abstractmethod
-    def post_llm_process(self, res_path: Union[str, PathLike],
-                         context: Dict[str, str], 
-                         output_dir: Optional[Union[str, PathLike]] = None
-                        )->None: ...
+    def post_llm_process(self, context: Dict[str, str], metadata: Optional[dict] = None) -> None: ...

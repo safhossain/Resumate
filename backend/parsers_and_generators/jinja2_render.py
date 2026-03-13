@@ -18,9 +18,15 @@ def render_and_generate(context: Dict[str, str], resume_path: Union[str, PathLik
     else:
         pass
 
+    is_tex = resume_name.endswith((".tex.j2", ".tex"))
+
     env = Environment(
         loader=FileSystemLoader(resume_parent_dir),
-        autoescape=False
+        autoescape=False,
+        comment_start_string="{##" if is_tex else "{#",
+        comment_end_string="##}" if is_tex else "#}",
+        block_start_string="{%%" if is_tex else "{%",
+        block_end_string="%%}" if is_tex else "%}",
     )
     
     template = env.get_template(resume_name)

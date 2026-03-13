@@ -5,7 +5,7 @@ import json
 
 from context_helpers import resolve_placeholders
 from contracts import LLM_I, MOD_DEG, LLM_O
-from LLM_CALL import CALL
+from LLM_CALL import CALL, CALL_RAW, MODELS, DEFAULT_MODEL  # type: ignore[import-untyped]
 
 from file_type_base import FileType
 from file_type_txt_j2 import TXTf
@@ -13,127 +13,269 @@ from file_type_tex_j2 import J2f
 from file_type_docx import DOCXf
 from file_type_pdf import PDFf
 
-GATEWAY_DIR         = Path(__file__).resolve().parent
-RESUME_NAME:str     = ''
-RESUME_PATH         = (GATEWAY_DIR / '..' / 'templates' / 'resume' / RESUME_NAME).resolve()
-PLACEHOLDERS_PATH   = (GATEWAY_DIR / '..' / 'fields.json').resolve()
-JOB_POSTING_PATH    = (GATEWAY_DIR / '..' / 'postings_new' / 'job_posting_2.txt').resolve()
-ACC_PATH            = (GATEWAY_DIR / '..' / 'resources' / 'ACC.txt').resolve()
-SENSITIVE_PATH      = (GATEWAY_DIR / '..' / 'sensitive_fields.json').resolve()
-OUTPUT_DIR          = (GATEWAY_DIR / '..' / 'outputs' ).resolve()
+GATEWAY_DIR       = Path(__file__).resolve().parent
+RESUME_NAME: str  = ""
+RESUME_PATH       = (GATEWAY_DIR / ".." / "templates" / "resume" / RESUME_NAME).resolve()
+PLACEHOLDERS_PATH = (GATEWAY_DIR / ".." / "fields.json").resolve()
+POSTING_DIR       = (GATEWAY_DIR / ".." / "postings_new").resolve()
+DEFAULT_POSTING   = "posting_1.txt"
+ACC_PATH          = (GATEWAY_DIR / ".." / "resources" / "ACC.txt").resolve()
+SENSITIVE_PATH    = (GATEWAY_DIR / ".." / "sensitive_fields.json").resolve()
+OUTPUT_DIR        = (GATEWAY_DIR / ".." / "outputs").resolve()
 
 HANDLERS: dict[tuple[str, ...], type[FileType]] = {
-    ('.tex', '.j2'):    J2f,
-    ('.txt', '.j2'):    TXTf,
-    ('.doc',):          DOCXf,
-    ('.docx',):         DOCXf,
-    ('.pdf',):          PDFf,
+    (".tex", ".j2"): J2f,
+    (".txt", ".j2"): TXTf,
+    (".doc",):       DOCXf,
+    (".docx",):      DOCXf,
+    (".pdf",):       PDFf,
 }
 
-def main(opcode):
+TEMPLATE_MAP = {
+    "doc": "BASE_TEMPLATE.docx",
+    "tex": "BASE_TEMPLATE.tex.j2",
+    "txt": "BASE_TEMPLATE.txt.j2",
+    "pdf": "BASE_RESUME_TEMPL.pdf", #actually, we don't support pdf yet. placeholder for future support.
+}
+
+
+def main(
+    opcode: int,
+    model: str | None = None,
+    job_posting_path: Path | None = None,
+    output_format: str = "json",
+    mod_deg: MOD_DEG = MOD_DEG.LOW,
+    faux: bool = False,
+) -> None:
     with open(PLACEHOLDERS_PATH) as f:
         fields = json.load(f)
-    with open(JOB_POSTING_PATH, 'r', encoding='utf-8') as f:
+
+    posting_path = job_posting_path or (POSTING_DIR / DEFAULT_POSTING)
+    with open(posting_path, "r", encoding="utf-8") as f:
         JOB_DESCRIPTION = f.read()
-    with open(ACC_PATH, 'r', encoding='utf-8') as f:
+
+    with open(ACC_PATH, "r", encoding="utf-8") as f:
         ACC = f.read()
+
     with open(SENSITIVE_PATH) as f:
         sensitive_fields = json.load(f)
-    
-    # determine file-handler type
-    suffixes = tuple(s.lower() for s in RESUME_PATH.suffixes)    
-    key = suffixes[-2:] if suffixes[-2:] in HANDLERS else (suffixes[-1],)    
+
+    # Determine file-handler from resume suffix(es)
+    suffixes = tuple(s.lower() for s in RESUME_PATH.suffixes)
+    key = suffixes[-2:] if suffixes[-2:] in HANDLERS else (suffixes[-1],)
     try:
         Handler = HANDLERS[key]
     except KeyError:
         raise ValueError("Resume file must be one of: .docx, .doc, .txt.j2, .pdf, or .tex.j2")
 
     ft = Handler(RESUME_PATH, OUTPUT_DIR)
-
     FULL_RESUME_STR = ft.get_resume_str()
-    #print(FULL_RESUME_STR)
 
-    # Get LLM-modified field placeholders: file type agonstic
-    payload:LLM_I = {
+    payload: LLM_I = {
         "full_resume": FULL_RESUME_STR,
         "placeholders": fields,
-        "mod_deg": MOD_DEG.HIGH,
-        "faux": True,
+        "mod_deg": mod_deg,
+        "faux": faux,
         "job_posting": JOB_DESCRIPTION,
-        "acc": ACC
+        "acc": ACC,
     }
+
     if opcode != 1:
-        llm_response: LLM_O = CALL(payload)
-        mod_fields   = llm_response["placeholders"]
-        changes_made = llm_response["changes_made"]
+        if output_format == "stream":
+            raw = CALL_RAW(payload, model=model)
+            print("--- Raw LLM Response ---")
+            print(raw)
+            return
+        else:
+            llm_response: LLM_O = CALL(payload, model=model)
+            mod_fields   = llm_response["placeholders"]
+            changes_made = llm_response["changes_made"]
+            print("--- LLM Response ---")
+            print(json.dumps(llm_response, indent=2))
+            print("--------------------\n")
     else:
         mod_fields   = fields
         changes_made = "-"
-    #print(f'placeholders = {mod_fields}')
-    print(f'changes_made = {changes_made}')
+        print("(no LLM call — using original placeholders)")
 
-    #Load context with sensitive data placeholders + new LLM-output field placeholders
-    context:Dict[str, str] = dict(sensitive_fields)
+    # Merge sensitive fields + LLM-modified placeholders, then resolve
+    # recursive {{ PLACEHOLDER }} references before passing to Jinja2
+    context: Dict[str, str | None] = dict(sensitive_fields)
     context.update(mod_fields)
-    '''
-        Warning: Recursive {{ PLACEHOLDERS }}
-
-        If there are {{ PLACEHOLDERS }} in the fields dict's values, then they will 
-        have to be PRE-rendered inside the `context` variable first. Why can't we 
-        just continously render with jinja render() function? Because:
-        Jinja2 rendering will cause all jinja-like blocks, such as {% ... %} and 
-        {# ... #} to be "rendered away". So what we are left with is essentially RAW .tex
-        Therefore, if you try to render twice, it will cause many TemplateSyntaxError 
-        messages. There probably is a best-practices for multi-rendering, but in this 
-        case, the easiest possible soln is just to simulate 'rendering' for the
-        context dict which will feed into being an argument for jinja's render().
-        This is done below with resolve_placeholders().
-    '''
     context = resolve_placeholders(context)
 
-    ft.post_llm_process(context)
+    clean_context: Dict[str, str] = {k: v for k, v in context.items() if v is not None}
+
+    run_metadata = {
+        "model":   model,
+        "posting": str(posting_path),
+        "moddeg":  mod_deg.value,
+        "faux":    faux,
+    }
+    ft.post_llm_process(clean_context, metadata=run_metadata)
+
 
 if __name__ == "__main__":
+    import sys
+
+    _EXAMPLES = """\
+Examples:
+  # Default run (deepseek, posting_1, low mod, no faux)
+  python gateway.py
+
+  # Claude, specific posting, render as .tex
+  python gateway.py -m claude/sonnet-4.6 -p posting_4.txt -f tex
+
+  # Aggressive rewrite with faux skills enabled
+  python gateway.py -m deepseek/chat -p posting_2.txt --moddeg high --faux
+
+  # Debug: see raw LLM output without writing a file
+  python gateway.py -m claude/sonnet-4.6 -p posting_4.txt -o stream
+
+  # Skip LLM, just render template with original placeholders
+  python gateway.py -n -p posting_3.txt -f doc\
+"""
+
+    if "examples" in sys.argv:
+        print(_EXAMPLES)
+        sys.exit(0)
+
     parser = argparse.ArgumentParser(
-        description="Choose to make an LLM call or not and which template format to use"
+        description="Resumate: generate a tailored resume via an LLM.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Model keys (--model):\n"
+            + "\n".join(f"  {k}" for k in MODELS)
+            + "\n\n"
+            "Note: -n/--no only accepts -f/--format and -p/--posting.\n"
+            "      --model, --output, --moddeg, and --faux require an LLM call.\n"
+            "\n"
+            "Tip: run with 'examples' to see usage examples.\n"
+            "  python gateway.py examples\n"
+            "  python gateway.py -h examples"
+        ),
     )
 
+    # ── LLM call toggle ────────────────────────────────────────────────────────
     group = parser.add_mutually_exclusive_group()
     group.add_argument(
         "-c", "--call",
         dest="do_call",
         action="store_true",
-        help="Perform an LLM call"
+        help="Perform an LLM call (default)",
     )
     group.add_argument(
         "-n", "--no",
         dest="do_call",
         action="store_false",
-        help="LLM call NOT performed"
+        help="Skip the LLM call; use original placeholders as-is",
     )
     parser.set_defaults(do_call=True)
 
+    # ── Resume template format ─────────────────────────────────────────────────
     parser.add_argument(
         "-f", "--format",
         dest="template_format",
-        choices=["doc", "tex", "txt", "pdf"],
+        choices=list(TEMPLATE_MAP),
         default="doc",
-        help="Resume template formats to use"
+        help="Resume template format to render (default: doc)",
+    )
+
+    # ── LLM model ─────────────────────────────────────────────────────────────
+    parser.add_argument(
+        "-m", "--model",
+        dest="model",
+        choices=list(MODELS),
+        default=DEFAULT_MODEL,
+        metavar="MODEL",
+        help=(
+            f"LLM model key (default: {DEFAULT_MODEL}). "
+            "Run with -h to see all available keys."
+        ),
+    )
+
+    # ── LLM output mode ───────────────────────────────────────────────────────
+    parser.add_argument(
+        "-o", "--output",
+        dest="output_format",
+        choices=["json", "stream"],
+        default="json",
+        help=(
+            "json  - structured response, full resume pipeline (default); "
+            "stream - raw LLM text for debugging, no file output"
+        ),
+    )
+
+    # ── Job posting file ───────────────────────────────────────────────────────
+    parser.add_argument(
+        "-p", "--posting",
+        dest="posting",
+        default=DEFAULT_POSTING,
+        metavar="FILENAME",
+        help=(
+            f"Job posting filename inside postings_new/ "
+            f"(default: {DEFAULT_POSTING}). "
+            "Example: -p posting_3.txt"
+        ),
+    )
+
+    # ── Modification degree ────────────────────────────────────────────────────
+    parser.add_argument(
+        "--moddeg",
+        dest="mod_deg",
+        choices=["low", "medium", "high"],
+        default="low",
+        help="How aggressively to rewrite placeholders (default: low)",
+    )
+
+    # ── Faux mode ─────────────────────────────────────────────────────────────
+    parser.add_argument(
+        "--faux",
+        dest="faux",
+        action="store_true",
+        default=False,
+        help="Allow LLM to introduce skills/experience not already in the resume (default: off)",
     )
 
     args = parser.parse_args()
 
-    TEMPLATE_MAP = {
-        "doc": "BASE_RESUME_TEMPL.docx",
-        "tex": "BASE_RESUME_TEMPL.tex.j2",
-        "txt": "BASE_RESUME_TEMPL.txt.j2",
-        "pdf": "BASE_RESUME_TEMPL.pdf",
-    } 
+    # Enforce: --no is incompatible with LLM-only flags
+    if not args.do_call:
+        llm_only = {
+            "--model":   args.model   != DEFAULT_MODEL,
+            "--output":  args.output_format != "json",
+            "--moddeg":  args.mod_deg != "low",
+            "--faux":    args.faux,
+        }
+        offenders = [flag for flag, was_set in llm_only.items() if was_set]
+        if offenders:
+            parser.error(
+                f"-n/--no cannot be used with: {', '.join(offenders)}  "
+                "(these flags have no effect without an LLM call)"
+            )
+
+    # Resolve resume template path (mutates module-level globals used by main())
     RESUME_NAME = TEMPLATE_MAP[args.template_format]
     RESUME_PATH = (GATEWAY_DIR / ".." / "templates" / "resume" / RESUME_NAME).resolve()
 
+    posting_path = (POSTING_DIR / Path(args.posting).name).resolve()
+
+    mod_deg_map = {"low": MOD_DEG.LOW, "medium": MOD_DEG.MEDIUM, "high": MOD_DEG.HIGH}
+
     if args.do_call:
-        print("Calling ...\n")
-        main(0)
+        print(f"Model  : {args.model}")
+        print(f"Posting: {posting_path.name}")
+        print(f"Output : {args.output_format}")
+        print(f"Mod deg: {args.mod_deg}")
+        print(f"Faux   : {args.faux}\n")
+        main(
+            0,
+            model=args.model,
+            job_posting_path=posting_path,
+            output_format=args.output_format,
+            mod_deg=mod_deg_map[args.mod_deg],
+            faux=args.faux,
+        )
     else:
-        main(1)
+        print(f"Posting: {posting_path.name}  (no LLM call)\n")
+        main(1, job_posting_path=posting_path)
