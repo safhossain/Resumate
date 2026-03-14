@@ -4,7 +4,7 @@ from os import PathLike
 import time
 import shutil
 
-from file_type_base import FileType
+from .file_type_base import FileType
 
 class PDFf(FileType):
     

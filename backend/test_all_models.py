@@ -8,12 +8,10 @@ import sys
 import time
 from pathlib import Path
 
-GATEWAY = Path(__file__).resolve().parent / "parsers_and_generators" / "gateway.py"
+REPO_ROOT = Path(__file__).resolve().parent.parent
 ACTIVE_FORMATS = ["tex", "doc"]
 
-_PG_DIR = Path(__file__).resolve().parent / "parsers_and_generators"
-sys.path.insert(0, str(_PG_DIR))
-from LLM_CALL import MODELS  # noqa: E402
+from backend.llm_integration.LLM_CALL import MODELS
 
 ALL_MODELS = list(MODELS.keys())
 
@@ -64,7 +62,7 @@ def main():
 
     for idx, (model, fmt) in enumerate(combos, 1):
         cmd = [
-            sys.executable, str(GATEWAY),
+            sys.executable, "-m", "backend.main",
             "--call", "-m", model, "-f", fmt,
         ] + forward_args
 
@@ -75,7 +73,7 @@ def main():
         print(f"{'─' * 70}")
 
         t0 = time.time()
-        proc = subprocess.run(cmd)
+        proc = subprocess.run(cmd, cwd=str(REPO_ROOT))
         elapsed = time.time() - t0
 
         ok = proc.returncode == 0

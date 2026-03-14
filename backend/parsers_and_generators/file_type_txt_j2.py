@@ -3,8 +3,8 @@ from typing import Dict, Optional
 import shutil
 import time
 
-from file_type_base import FileType, build_output_tag
-from jinja2_render import render_and_generate
+from .file_type_base import FileType, build_output_tag
+from .jinja2_render import render_and_generate
 
 class TXTf(FileType):    
     def get_resume_str(self)->str:

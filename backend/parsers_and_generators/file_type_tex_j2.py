@@ -2,9 +2,9 @@ from pathlib import Path
 from typing import Dict, Optional
 import time
 
-from file_type_base import FileType, build_output_tag
-from jinja2_render import render_and_generate
-from tex_to_pdf import gen_pdf
+from .file_type_base import FileType, build_output_tag
+from .jinja2_render import render_and_generate
+from .tex_to_pdf import gen_pdf
 
 class J2f(FileType):  
 

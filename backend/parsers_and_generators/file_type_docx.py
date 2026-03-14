@@ -4,8 +4,8 @@ import docx2txt
 import shutil
 import time
 
-from file_type_base import FileType, build_output_tag
-from context_helpers import escape_chars
+from .file_type_base import FileType, build_output_tag
+from .context_helpers import escape_chars
 
 class DOCXf(FileType):
     def get_resume_str(self)->str:

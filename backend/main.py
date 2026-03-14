@@ -2,26 +2,27 @@ from pathlib import Path
 from typing import Dict
 import argparse
 import json
+import sys
 
-from context_helpers import resolve_placeholders
-from contracts import LLM_I, MOD_DEG, LLM_O
-from LLM_CALL import CALL, CALL_RAW, MODELS, DEFAULT_MODEL  # type: ignore[import-untyped]
+from backend.llm_integration.AI_API.api_scripts.contracts import LLM_I, MOD_DEG, LLM_O
+from backend.llm_integration.LLM_CALL import CALL, CALL_RAW, MODELS, DEFAULT_MODEL
+from backend.parsers_and_generators.context_helpers import resolve_placeholders
 
-from file_type_base import FileType
-from file_type_txt_j2 import TXTf
-from file_type_tex_j2 import J2f
-from file_type_docx import DOCXf
-from file_type_pdf import PDFf
+from backend.parsers_and_generators.file_type_base import FileType
+from backend.parsers_and_generators.file_type_txt_j2 import TXTf
+from backend.parsers_and_generators.file_type_tex_j2 import J2f
+from backend.parsers_and_generators.file_type_docx import DOCXf
+from backend.parsers_and_generators.file_type_pdf import PDFf
 
 GATEWAY_DIR       = Path(__file__).resolve().parent
 RESUME_NAME: str  = ""
-RESUME_PATH       = (GATEWAY_DIR / ".." / "templates" / "resume" / RESUME_NAME).resolve()
-PLACEHOLDERS_PATH = (GATEWAY_DIR / ".." / "fields.json").resolve()
-POSTING_DIR       = (GATEWAY_DIR / ".." / "postings_new").resolve()
+RESUME_PATH       = (GATEWAY_DIR / "templates" / "resume" / RESUME_NAME).resolve()
+PLACEHOLDERS_PATH = (GATEWAY_DIR / "fields.json").resolve()
+POSTING_DIR       = (GATEWAY_DIR / "postings_new").resolve()
 DEFAULT_POSTING   = "posting_1.txt"
-ACC_PATH          = (GATEWAY_DIR / ".." / "resources" / "ACC.txt").resolve()
-SENSITIVE_PATH    = (GATEWAY_DIR / ".." / "sensitive_fields.json").resolve()
-OUTPUT_DIR        = (GATEWAY_DIR / ".." / "outputs").resolve()
+ACC_PATH          = (GATEWAY_DIR / "resources" / "ACC.txt").resolve()
+SENSITIVE_PATH    = (GATEWAY_DIR / "sensitive_fields.json").resolve()
+OUTPUT_DIR        = (GATEWAY_DIR / "outputs").resolve()
 
 HANDLERS: dict[tuple[str, ...], type[FileType]] = {
     (".tex", ".j2"): J2f,
@@ -47,7 +48,7 @@ def main(
     mod_deg: MOD_DEG = MOD_DEG.LOW,
     faux: bool = False,
 ) -> None:
-    with open(PLACEHOLDERS_PATH) as f:
+    with open(PLACEHOLDERS_PATH, encoding="utf-8") as f:
         fields = json.load(f)
 
     posting_path = job_posting_path or (POSTING_DIR / DEFAULT_POSTING)
@@ -57,7 +58,7 @@ def main(
     with open(ACC_PATH, "r", encoding="utf-8") as f:
         ACC = f.read()
 
-    with open(SENSITIVE_PATH) as f:
+    with open(SENSITIVE_PATH, encoding="utf-8") as f:
         sensitive_fields = json.load(f)
 
     # Determine file-handler from resume suffix(es)
@@ -115,25 +116,24 @@ def main(
     ft.post_llm_process(clean_context, metadata=run_metadata)
 
 
-if __name__ == "__main__":
-    import sys
+if __name__ == "__main__":    
 
     _EXAMPLES = """\
 Examples:
   # Default run (deepseek, posting_1, low mod, no faux)
-  python gateway.py
+  python -m backend.main
 
   # Claude, specific posting, render as .tex
-  python gateway.py -m claude/sonnet-4.6 -p posting_4.txt -f tex
+  python -m backend.main -m claude/sonnet-4.6 -p posting_4.txt -f tex
 
   # Aggressive rewrite with faux skills enabled
-  python gateway.py -m deepseek/chat -p posting_2.txt --moddeg high --faux
+  python -m backend.main -m deepseek/chat -p posting_2.txt --moddeg high --faux
 
   # Debug: see raw LLM output without writing a file
-  python gateway.py -m claude/sonnet-4.6 -p posting_4.txt -o stream
+  python -m backend.main -m claude/sonnet-4.6 -p posting_4.txt -o stream
 
   # Skip LLM, just render template with original placeholders
-  python gateway.py -n -p posting_3.txt -f doc\
+  python -m backend.main -n -p posting_3.txt -f doc\
 """
 
     if "examples" in sys.argv:
@@ -151,12 +151,12 @@ Examples:
             "      --model, --output, --moddeg, and --faux require an LLM call.\n"
             "\n"
             "Tip: run with 'examples' to see usage examples.\n"
-            "  python gateway.py examples\n"
-            "  python gateway.py -h examples"
+            "  python -m backend.main examples\n"
+            "  python -m backend.main -h examples"
         ),
     )
 
-    # ── LLM call toggle ────────────────────────────────────────────────────────
+    # LLM call toggle
     group = parser.add_mutually_exclusive_group()
     group.add_argument(
         "-c", "--call",
@@ -172,7 +172,7 @@ Examples:
     )
     parser.set_defaults(do_call=True)
 
-    # ── Resume template format ─────────────────────────────────────────────────
+    # Resume template format flag
     parser.add_argument(
         "-f", "--format",
         dest="template_format",
@@ -181,7 +181,7 @@ Examples:
         help="Resume template format to render (default: doc)",
     )
 
-    # ── LLM model ─────────────────────────────────────────────────────────────
+    # LLM model flag
     parser.add_argument(
         "-m", "--model",
         dest="model",
@@ -194,7 +194,7 @@ Examples:
         ),
     )
 
-    # ── LLM output mode ───────────────────────────────────────────────────────
+    # LLM output mode flag
     parser.add_argument(
         "-o", "--output",
         dest="output_format",
@@ -206,7 +206,7 @@ Examples:
         ),
     )
 
-    # ── Job posting file ───────────────────────────────────────────────────────
+    # Job posting file flag
     parser.add_argument(
         "-p", "--posting",
         dest="posting",
@@ -219,16 +219,16 @@ Examples:
         ),
     )
 
-    # ── Modification degree ────────────────────────────────────────────────────
+    # Modification degree flag
     parser.add_argument(
         "--moddeg",
         dest="mod_deg",
-        choices=["low", "medium", "high"],
-        default="low",
-        help="How aggressively to rewrite placeholders (default: low)",
+        choices=[m.value for m in MOD_DEG],
+        default=MOD_DEG.LOW.value,
+        help=f"How aggressively to rewrite placeholders (default: {MOD_DEG.LOW.value})",
     )
 
-    # ── Faux mode ─────────────────────────────────────────────────────────────
+    # Faux mode flag
     parser.add_argument(
         "--faux",
         dest="faux",
@@ -244,7 +244,7 @@ Examples:
         llm_only = {
             "--model":   args.model   != DEFAULT_MODEL,
             "--output":  args.output_format != "json",
-            "--moddeg":  args.mod_deg != "low",
+            "--moddeg":  args.mod_deg != MOD_DEG.LOW.value,
             "--faux":    args.faux,
         }
         offenders = [flag for flag, was_set in llm_only.items() if was_set]
@@ -256,11 +256,11 @@ Examples:
 
     # Resolve resume template path (mutates module-level globals used by main())
     RESUME_NAME = TEMPLATE_MAP[args.template_format]
-    RESUME_PATH = (GATEWAY_DIR / ".." / "templates" / "resume" / RESUME_NAME).resolve()
+    RESUME_PATH = (GATEWAY_DIR / "templates" / "resume" / RESUME_NAME).resolve()
 
     posting_path = (POSTING_DIR / Path(args.posting).name).resolve()
 
-    mod_deg_map = {"low": MOD_DEG.LOW, "medium": MOD_DEG.MEDIUM, "high": MOD_DEG.HIGH}
+    mod_deg_map = {m.value: m for m in MOD_DEG}
 
     if args.do_call:
         print(f"Model  : {args.model}")

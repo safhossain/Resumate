@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Union
 from os import PathLike
 
-from context_helpers import escape_chars
+from .context_helpers import escape_chars
 
 def render_and_generate(context: Dict[str, str], resume_path: Union[str, PathLike], output_path: Union[str, PathLike])->None:
     resume_name = Path(resume_path).name            #ex:    filename.tex.j2    |   filename.txt.j2 |   filename.docx

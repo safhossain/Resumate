@@ -1,35 +1,28 @@
 from __future__ import annotations
-
 import json
 import os
 from typing import Optional
-
 from dotenv import load_dotenv
+
+import anthropic
+from openai import OpenAI
+import google.genai as genai
+from google.genai import types as genai_types
+
+from .contracts import LLM_I, LLM_O
 
 load_dotenv()
 
-# Models
-
 MODELS: dict[str, dict] = {
-    # Anthropic Claude
     "claude/sonnet-4.6":    {"provider": "claude",   "model_id": "claude-sonnet-4-6"},
     "claude/opus-4.6":      {"provider": "claude",   "model_id": "claude-opus-4-6"},
-    # OpenAI
     "openai/gpt-5.4":       {"provider": "openai",   "model_id": "gpt-5.4"},
-    # Google Gemini
     "gemini/gemini-3-flash": {"provider": "gemini",  "model_id": "gemini-3-flash-preview"},
-    # DeepSeek
     "deepseek/chat":         {"provider": "deepseek", "model_id": "deepseek-chat"},
-    # xAI Grok
     "xai/grok-3":            {"provider": "xai",      "model_id": "grok-3"},
 }
 
-# Claude
-
-
 def _claude_ask(model_id: str, prompt: str, system: Optional[str]) -> str:
-    import anthropic
-
     client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
     kwargs: dict = {
         "model": model_id,
@@ -42,10 +35,7 @@ def _claude_ask(model_id: str, prompt: str, system: Optional[str]) -> str:
     text_block = next(b for b in msg.content if b.type == "text")
     return text_block.text
 
-
-def _claude_ask_json(model_id: str, prompt: str, schema: dict, system: Optional[str]) -> dict:
-    import anthropic
-
+def _claude_ask_json(model_id: str, prompt: str, schema: dict, system: Optional[str]) -> LLM_O:
     client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
     kwargs: dict = {
         "model": model_id,
@@ -61,8 +51,6 @@ def _claude_ask_json(model_id: str, prompt: str, schema: dict, system: Optional[
 
 
 # OpenAI-compatible (OpenAI + xAI share the same interface)
-
-
 def _openai_ask(
     model_id: str,
     api_key: str,
@@ -70,7 +58,6 @@ def _openai_ask(
     prompt: str,
     system: Optional[str],
 ) -> str:
-    from openai import OpenAI
 
     client = OpenAI(api_key=api_key, base_url=base_url)
     messages = []
@@ -80,7 +67,6 @@ def _openai_ask(
     resp = client.chat.completions.create(model=model_id, messages=messages)
     return resp.choices[0].message.content or ""
 
-
 def _openai_ask_json(
     model_id: str,
     api_key: str,
@@ -88,9 +74,8 @@ def _openai_ask_json(
     prompt: str,
     schema: dict,
     system: Optional[str],
-) -> dict:
-    from openai import OpenAI
-
+) -> LLM_O:
+    
     client = OpenAI(api_key=api_key, base_url=base_url)
     messages = []
     if system:
@@ -107,13 +92,7 @@ def _openai_ask_json(
     return json.loads(resp.choices[0].message.content or "")
 
 
-# Gemini
-
-
 def _gemini_ask(model_id: str, prompt: str, system: Optional[str]) -> str:
-    import google.genai as genai
-    from google.genai import types as genai_types
-
     client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
     config = genai_types.GenerateContentConfig(
         system_instruction=system,
@@ -121,8 +100,7 @@ def _gemini_ask(model_id: str, prompt: str, system: Optional[str]) -> str:
     resp = client.models.generate_content(model=model_id, contents=prompt, config=config)
     return resp.text or ""
 
-
-def _gemini_ask_json(model_id: str, prompt: str, schema: dict, system: Optional[str]) -> dict:
+def _gemini_ask_json(model_id: str, prompt: str, schema: dict, system: Optional[str]) -> LLM_O:
     import google.genai as genai
     from google.genai import types as genai_types
 
@@ -139,8 +117,6 @@ def _gemini_ask_json(model_id: str, prompt: str, schema: dict, system: Optional[
 # DeepSeek
 # DeepSeek supports json_object but not json_schema, so the schema is
 # serialised into the system prompt and validated client-side (with retries).
-
-
 def _deepseek_ask(model_id: str, prompt: str, system: Optional[str]) -> str:
     from openai import OpenAI
 
@@ -152,8 +128,7 @@ def _deepseek_ask(model_id: str, prompt: str, system: Optional[str]) -> str:
     resp = client.chat.completions.create(model=model_id, messages=messages)
     return resp.choices[0].message.content or ""
 
-
-def _deepseek_ask_json(model_id: str, prompt: str, schema: dict, system: Optional[str]) -> dict:
+def _deepseek_ask_json(model_id: str, prompt: str, schema: dict, system: Optional[str]) -> LLM_O:
     from openai import OpenAI
 
     client = OpenAI(api_key=os.environ["DEEPSEEK_API_KEY"], base_url="https://api.deepseek.com")
@@ -189,8 +164,6 @@ def _deepseek_ask_json(model_id: str, prompt: str, schema: dict, system: Optiona
 
 
 # Routing helpers
-
-
 def _resolve(model: str) -> tuple[str, str]:
     """Return (provider, model_id) for a model key, or raise ValueError."""
     if model not in MODELS:
@@ -200,8 +173,6 @@ def _resolve(model: str) -> tuple[str, str]:
 
 
 # Public API
-
-
 def ask(model: str, prompt: str, system: Optional[str] = None) -> str:
     """Send *prompt* to *model* and return the plain-text response.
 
@@ -232,8 +203,7 @@ def ask(model: str, prompt: str, system: Optional[str] = None) -> str:
 
     raise ValueError(f"Unhandled provider: {provider!r}")
 
-
-def ask_json(model: str, prompt: str, schema: dict, system: Optional[str] = None) -> dict:
+def ask_json(model: str, prompt: str, schema: dict, system: Optional[str] = None) -> LLM_O:
     """Send *prompt* to *model* and return the response as a parsed dict.
 
     Args:
@@ -267,8 +237,6 @@ def ask_json(model: str, prompt: str, schema: dict, system: Optional[str] = None
 
 
 # Class-based convenience wrapper
-
-
 class AIGateway:
     """Gateway bound to a single model (and optional system prompt).
 
@@ -303,7 +271,7 @@ class AIGateway:
         """Plain-text request.  See module-level ``ask()`` for full docs."""
         return ask(self.model, prompt, self.system)
 
-    def ask_json(self, prompt: str, schema: dict) -> dict:
+    def ask_json(self, prompt: str, schema: dict) -> LLM_O:
         """Structured JSON request.  See module-level ``ask_json()`` for full docs."""
         return ask_json(self.model, prompt, schema, self.system)
 
