@@ -12,10 +12,10 @@ class TXTf(FileType):
             r = f.read()
         return r
     
-    def post_llm_process(self, context: Dict[str, str], metadata: Optional[dict] = None)->None:
+    def post_llm_process(self, context: Dict[str, str], metadata: Optional[dict] = None) -> Path:
         self.context = context
 
-        orig =  self.res_path
+        orig = self.res_path
         timestamp = int(time.time())
         tag = build_output_tag(metadata)
         all_suffixes = "".join(orig.suffixes)
@@ -25,3 +25,4 @@ class TXTf(FileType):
         shutil.copy2(orig, working_copy_path)
 
         render_and_generate(self.context, self.res_path, working_copy_path)
+        return working_copy_path

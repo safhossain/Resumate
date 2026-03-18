@@ -104,14 +104,196 @@ RULES
     - Do not truncate values. Every placeholder must have a non-empty string value in the output.
 '''
 
+_PAGE_HINT_SECTION = """
+------------------------------------------------------------
+PAGE TARGET
+------------------------------------------------------------
+    The rendered output must fit within {pages} page(s). Write concisely and precisely.
+    Avoid padding, filler phrases, and redundancy.
+
+    REMOVE_BULLETPOINT:
+    - You may set any standalone bullet-point placeholder value to exactly: REMOVE_BULLETPOINT
+    - The pipeline will physically delete that bullet/paragraph from the output.
+    - Use this for content that is clearly off-topic for this job posting.
+    - Do NOT use it for core identity fields (name, summary, contact info, headings).
+"""
+
+_RETRY_PAGE_SECTION = """
+------------------------------------------------------------
+PAGE CONSTRAINT RETRY  (mod_deg={mod_deg}, faux={faux})
+------------------------------------------------------------
+    The rendered output was {actual_pages} page(s) — last page approximately {fill_pct_display}%
+    filled — but the target is {target_pages} page(s).
+
+    QUANTIFIED REDUCTION TARGET:
+    - Current total placeholder chars : {total_chars}
+    - Estimated chars to remove        : ~{chars_to_remove}
+    - This is derived from the measured last-page fill percentage above.
+    - Aim to cut at least {chars_to_remove} chars, prioritising the least job-relevant content.
+
+    CONTENT REMOVAL IS ENCOURAGED:
+    - Skills, tools, and experience bullet points that are NOT directly relevant to the job posting
+      SHOULD be removed — do not keep them just to fill space.
+    - When mod_deg is medium-low, medium, medium-high, or high, feel free to cut entire bullets or
+      skill items that add little value for this specific role.
+    - When faux=true and mod_deg is medium-low, medium, medium-high, or high, you MAY replace
+      removed content with tighter, more relevant content — but only if it fits within the page target.
+
+    REMOVE_BULLETPOINT SENTINEL:
+    - To signal that an entire bullet point or paragraph should be physically deleted from the
+      document, set the placeholder value to exactly the string: REMOVE_BULLETPOINT
+    - The pipeline will detect this sentinel and remove the whole paragraph/bullet from the output.
+    - Use REMOVE_BULLETPOINT for standalone bullet-point placeholders that represent discrete items
+      (e.g. a single experience bullet, a skill line). Do NOT use it for core identity fields such
+      as name, summary, job title, contact info, or section headings.
+    - Prefer REMOVE_BULLETPOINT over leaving a short, filler-filled value.
+
+    CONDENSING STRATEGY (apply in this order):
+    1. REMOVE_BULLETPOINT on the least job-relevant bullet points / skill items.
+    2. Shorten remaining bullets — cut filler phrases, tighten wording.
+    3. Condense verbose sentences without losing key information.
+    4. As a last resort, merge two closely related bullet points into one.
+
+    HARD RULES:
+    - Return every key. Core identity fields must have real, non-empty values.
+    - Do not invent facts (unless faux=true permits it as above).
+    - Do not truncate mid-sentence. If a bullet is kept, it must be a complete thought.
+"""
+
 # Public call interface
-def CALL(payload: LLM_I, model: str | None = None) -> LLM_O:
-    #Call the LLM with forced JSON output. Returns a parsed LLM_O dict
+def CALL(payload: LLM_I, model: str | None = None, page_hint: int | None = None) -> LLM_O:
+    """Call the LLM with forced JSON output. Returns a parsed LLM_O dict.
+
+    page_hint: if set, appends a concise page-target section to the system prompt
+    and enables the REMOVE_BULLETPOINT sentinel for the initial call.
+    """
     selected = model or DEFAULT_MODEL
     if selected not in MODELS:
         raise ValueError(f"Unknown model: {selected!r}. Available: {list(MODELS)}")
     schema = build_response_schema(payload["placeholders"])
-    return ask_json(selected, str(payload), schema, system=SYSTEM_PROMPT)
+    system = SYSTEM_PROMPT
+    if page_hint is not None:
+        system = system + _PAGE_HINT_SECTION.format(pages=page_hint)
+    return ask_json(selected, str(payload), schema, system=system)
+
+def CALL_RETRY(
+    payload: LLM_I,
+    actual_pages: int,
+    target_pages: int,
+    chars_to_remove: int,
+    last_page_fill_pct: float,
+    model: str | None = None,
+) -> LLM_O:
+    """Second LLM call issued when the rendered output exceeded the page target.
+
+    *payload* should contain the LLM-modified placeholders from the first call
+    (not the originals) so the model can see what it already produced and trim from there.
+    """
+    selected = model or DEFAULT_MODEL
+    if selected not in MODELS:
+        raise ValueError(f"Unknown model: {selected!r}. Available: {list(MODELS)}")
+    schema = build_response_schema(payload["placeholders"])
+    mod_deg = payload.get("mod_deg")
+    mod_deg_val = mod_deg.value if hasattr(mod_deg, "value") else str(mod_deg)
+    total_chars = sum(len(v) for v in payload["placeholders"].values())
+    retry_system = SYSTEM_PROMPT + _RETRY_PAGE_SECTION.format(
+        actual_pages=actual_pages,
+        target_pages=target_pages,
+        mod_deg=mod_deg_val,
+        faux=payload.get("faux", False),
+        fill_pct_display=round(last_page_fill_pct * 100),
+        total_chars=total_chars,
+        chars_to_remove=chars_to_remove,
+    )
+    return ask_json(selected, str(payload), schema, system=retry_system)
+
+_SECOND_RETRY_SECTION = """
+------------------------------------------------------------
+SECOND RETRY — WIDOW LINE TARGETING  (mod_deg={mod_deg}, faux={faux})
+------------------------------------------------------------
+    After the first retry, the output is still {actual_pages} page(s) with the last page
+    {fill_pct_display}% filled (target: {target_pages} page(s)).
+    Estimated chars still to remove: ~{chars_to_remove}.
+
+    PRIMARY TECHNIQUE — REPHRASE WIDOW LINES (do this first):
+    The following placeholders have been identified as having "widow" last lines in the rendered
+    output — their final rendered line contains only a few words. Rephrasing them to be 1 line
+    shorter can reclaim the needed space WITHOUT removing any skills, technologies, or facts.
+
+    Widow line targets:
+{widow_lines_block}
+    For each of these targets:
+    - Rephrase so the value fits in 1 fewer rendered line.
+    - Prefer: tighter phrasing, removing filler words, combining clauses.
+    - Small substitutions like "using" → "via", "in order to" → "to" help.
+    - Do NOT remove skills, technologies, metrics, or factual content from these values.
+    - If after rephrasing a value becomes too short to stand alone, use REMOVE_BULLETPOINT instead.
+
+    IMPORTANT — ROLE NAMES, TITLES, AND LABELS:
+    If a widow target appears to be a role name, job title, position label, company name, date
+    range, section label, or any other short identity/metadata field (e.g. "w2_role", "p2_desc"
+    style keys, or values that are just a job title like "Senior Software Engineer"), treat it
+    differently:
+    - Do NOT rephrase or shorten it aggressively — role names and titles must remain accurate.
+    - At most, make a very minor cosmetic tweak (e.g. remove a redundant word) if one is
+      completely obvious and harmless; otherwise leave the value unchanged.
+    - Instead, redirect effort to the secondary technique (REMOVE_BULLETPOINT or condensing
+      on nearby bullet points).
+
+    SECONDARY TECHNIQUE — only if widow rephrasing alone is insufficient:
+    Apply REMOVE_BULLETPOINT or further condensing on the least-relevant remaining bullets
+    (same rules as before).
+
+    HARD RULES:
+    - Return every key. Core identity fields must have real, non-empty values.
+    - Do not invent facts (unless faux=true permits it).
+    - Do not truncate mid-sentence. If a bullet is kept, it must be a complete thought.
+"""
+
+
+def CALL_RETRY2(
+    payload: LLM_I,
+    actual_pages: int,
+    target_pages: int,
+    chars_to_remove: int,
+    last_page_fill_pct: float,
+    widow_lines: dict,
+    model: str | None = None,
+) -> LLM_O:
+    """Third LLM call (user-prompted) — targets widow lines for 1-line rephrasing
+    before falling back to content removal.
+
+    *payload* should contain the placeholders from the first retry so the model
+    sees the current state and can apply targeted widow rephrasing.
+    """
+    selected = model or DEFAULT_MODEL
+    if selected not in MODELS:
+        raise ValueError(f"Unknown model: {selected!r}. Available: {list(MODELS)}")
+    schema = build_response_schema(payload["placeholders"])
+    mod_deg = payload.get("mod_deg")
+    mod_deg_val = mod_deg.value if hasattr(mod_deg, "value") else str(mod_deg)
+
+    if widow_lines:
+        lines = []
+        for key, value in widow_lines.items():
+            display = value[:120] + "..." if len(value) > 120 else value
+            lines.append(f'    - {key}: "{display}"')
+        widow_lines_block = "\n".join(lines)
+    else:
+        widow_lines_block = "    (none detected — fall back to secondary technique)"
+
+    total_chars = sum(len(v) for v in payload["placeholders"].values())
+    second_retry_system = SYSTEM_PROMPT + _SECOND_RETRY_SECTION.format(
+        actual_pages=actual_pages,
+        target_pages=target_pages,
+        mod_deg=mod_deg_val,
+        faux=payload.get("faux", False),
+        fill_pct_display=round(last_page_fill_pct * 100),
+        chars_to_remove=chars_to_remove,
+        widow_lines_block=widow_lines_block,
+    )
+    return ask_json(selected, str(payload), schema, system=second_retry_system)
+
 
 def CALL_RAW(payload: LLM_I, model: str | None = None) -> str:
     #Call the LLM in plain-text mode.  Returns the raw response string (debug)

@@ -6,3 +6,4 @@ docxtpl
 openai
 anthropic
 google-genai
+pymupdf

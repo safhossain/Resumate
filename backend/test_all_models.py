@@ -1,6 +1,6 @@
 """
-Run gateway.py across all models × active formats sequentially.
-Any unknown args are forwarded to gateway.py (e.g. -p, --moddeg, --faux).
+Run gateway.py across all models x active formats sequentially.
+Any unknown args are forwarded to main.py (e.g. -p, --moddeg, --faux).
 """
 import argparse
 import subprocess
@@ -18,9 +18,9 @@ ALL_MODELS = list(MODELS.keys())
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Run gateway.py across all models × active formats.",
+        description="Run main.py across all models x active formats.",
         epilog=(
-            "Any unrecognized args are forwarded to gateway.py.\n\n"
+            "Any unrecognized args are forwarded to main.py.\n\n"
             "Examples:\n"
             "  python test_all_models.py\n"
             "  python test_all_models.py --formats tex\n"
