@@ -23,6 +23,8 @@ def render_and_generate(context: Dict[str, str], resume_path: Union[str, PathLik
     env = Environment(
         loader=FileSystemLoader(resume_parent_dir),
         autoescape=False,
+        variable_start_string="(((" if is_tex else "{{",
+        variable_end_string=")))" if is_tex else "}}",
         comment_start_string="{##" if is_tex else "{#",
         comment_end_string="##}" if is_tex else "#}",
         block_start_string="{%%" if is_tex else "{%",

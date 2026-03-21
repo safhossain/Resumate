@@ -2,12 +2,21 @@ from pathlib import Path
 from typing import Dict
 import argparse
 import json
+import shutil
 import sys
+import tempfile
 import time
 
 from backend.llm_integration.AI_API.api_scripts.contracts import LLM_I, MOD_DEG, LLM_O
-from backend.llm_integration.LLM_CALL import CALL, CALL_RAW, CALL_RETRY, CALL_RETRY2, MODELS, DEFAULT_MODEL
-from backend.parsers_and_generators.page_count_docx import get_docx_page_info, detect_widow_lines_from_docx
+from backend.llm_integration.LLM_CALL import (
+    CALL, CALL_RAW,
+    CALL_RETRY, CALL_RETRY2,
+    CALL_RETRY_TEX, CALL_RETRY2_TEX,
+    MODELS, DEFAULT_MODEL,
+)
+from backend.parsers_and_generators.page_count_docx import get_docx_page_info, analyze_mbps_from_docx
+from backend.parsers_and_generators.page_info import get_pdf_page_info
+from backend.parsers_and_generators.visual_lines import analyze_mbps
 from backend.parsers_and_generators.context_helpers import resolve_placeholders
 
 from backend.parsers_and_generators.file_type_base import FileType
@@ -36,7 +45,7 @@ HANDLERS: dict[tuple[str, ...], type[FileType]] = {
 
 TEMPLATE_MAP = {
     "doc": "BASE_TEMPLATE.docx",
-    "tex": "BASE_TEMPLATE.tex.j2",
+    "tex": "BASE_TEMPLATE_2.tex.j2",
     "txt": "BASE_TEMPLATE.txt.j2",
     "pdf": "BASE_RESUME_TEMPL.pdf", #actually, we don't support pdf yet. placeholder for future support.
 }
@@ -64,6 +73,7 @@ def main(
     mod_deg: MOD_DEG = MOD_DEG.LOW,
     faux: bool = False,
     pages: int | None = None,
+    auto_retry: bool = False,
 ) -> None:
     with open(PLACEHOLDERS_PATH, encoding="utf-8") as f:
         fields = json.load(f)
@@ -89,6 +99,14 @@ def main(
     ft = Handler(RESUME_PATH, OUTPUT_DIR)
     FULL_RESUME_STR = ft.get_resume_str()
 
+    # Merge sensitive fields + LLM-modified placeholders, then resolve
+    # recursive {{ PLACEHOLDER }} references before passing to Jinja2
+    def _build_context(placeholder_values: dict) -> Dict[str, str]:
+        ctx: Dict[str, str | None] = dict(sensitive_fields)
+        ctx.update(placeholder_values)
+        ctx = resolve_placeholders(ctx)
+        return {k: v for k, v in ctx.items() if v is not None}
+
     payload: LLM_I = {
         "full_resume": FULL_RESUME_STR,
         "placeholders": fields,
@@ -108,7 +126,41 @@ def main(
             print("--- Input placeholder char counts ---")
             _print_placeholder_summary(fields)
             print()
-            llm_response: LLM_O = CALL(payload, model=model, page_hint=pages)
+
+            # Pre-render with original placeholders to establish baseline metrics
+            baseline_fields = None
+            if pages is not None and Handler in (DOCXf, J2f):
+                print("--- Pre-render baseline (original placeholders) ---")
+                pre_context = _build_context(fields)
+                tmp_dir = Path(tempfile.mkdtemp(prefix="resumate_prerender_"))
+                try:
+                    pre_ft = Handler(RESUME_PATH, tmp_dir)
+                    pre_meta = {"timestamp": int(time.time()), "suffix": "_prerender"}
+                    pre_output = pre_ft.post_llm_process(pre_context, metadata=pre_meta)
+
+                    is_tex = (Handler is J2f)
+                    if is_tex:
+                        pre_info = get_pdf_page_info(pre_output)
+                    else:
+                        pre_info = get_docx_page_info(pre_output)
+
+                    if pre_info:
+                        pre_pages = pre_info["page_count"]
+                        pre_fill = round(pre_info["last_page_fill_pct"] * 100)
+                        print(f"  Pre-render: {pre_pages} page(s), last page ~{pre_fill}% filled")
+                    else:
+                        print("  Pre-render: page info unavailable")
+
+                    baseline_fields = fields
+                    print(f"  Baseline char budgets will be injected into first LLM call.")
+                finally:
+                    shutil.rmtree(tmp_dir, ignore_errors=True)
+                print()
+
+            llm_response: LLM_O = CALL(
+                payload, model=model, page_hint=pages,
+                baseline_fields=baseline_fields,
+            )
             mod_fields   = llm_response["placeholders"]
             changes_made = llm_response["changes_made"]
             print("--- LLM Response ---")
@@ -118,14 +170,6 @@ def main(
         mod_fields   = fields
         changes_made = "-"
         print("(no LLM call — using original placeholders)")
-
-    # Merge sensitive fields + LLM-modified placeholders, then resolve
-    # recursive {{ PLACEHOLDER }} references before passing to Jinja2
-    def _build_context(placeholder_values: dict) -> Dict[str, str]:
-        ctx: Dict[str, str | None] = dict(sensitive_fields)
-        ctx.update(placeholder_values)
-        ctx = resolve_placeholders(ctx)
-        return {k: v for k, v in ctx.items() if v is not None}
 
     run_timestamp = int(time.time())
     run_metadata = {
@@ -139,9 +183,17 @@ def main(
     clean_context = _build_context(mod_fields)
     output_path = ft.post_llm_process(clean_context, metadata=run_metadata)
 
-    # Page-limit check (docx only; requires LibreOffice on PATH)
-    if pages is not None and Handler is DOCXf and opcode != 1:
-        page_info = get_docx_page_info(output_path)
+    # Page-limit check (docx and tex; docx requires LibreOffice on PATH)
+    if pages is not None and Handler in (DOCXf, J2f) and opcode != 1:
+        is_tex = (Handler is J2f)
+        fmt_label = "LaTeX/PDF" if is_tex else "DOCX"
+
+        # J2f output is already a PDF; DOCXf needs LibreOffice → PDF conversion
+        if is_tex:
+            page_info = get_pdf_page_info(output_path)
+        else:
+            page_info = get_docx_page_info(output_path)
+
         if page_info is None:
             print("Page check: skipped (see warnings above).")
         else:
@@ -150,18 +202,36 @@ def main(
             fill_display = f"{round(fill_pct * 100)}%"
 
             if actual_pages <= pages:
-                print(f"Page check: {actual_pages} page(s), last page {fill_display} filled — within target ({pages}). ✓")
+                print(f"Page check ({fmt_label}): {actual_pages} page(s), last page {fill_display} filled — within target ({pages}). ✓")
             else:
-                # Derive a concrete character-reduction target from the fill measurement.
-                # effective_pages = full pages before last + fraction of last page
-                # chars_per_page  = total_chars / effective_pages  (self-calibrating, no pre-calibration needed)
-                # chars_to_remove = total_chars - (target_pages * chars_per_page)
-                total_chars      = sum(len(v) for v in mod_fields.values())
-                effective_pages  = (actual_pages - 1) + fill_pct
-                chars_per_page   = total_chars / effective_pages if effective_pages > 0 else total_chars
-                chars_to_remove  = max(1, int(total_chars - pages * chars_per_page))
+                print(f"Page check ({fmt_label}): {actual_pages} page(s), last page {fill_display} filled — exceeds target ({pages}). Retrying with LLM...")
 
-                print(f"Page check: {actual_pages} page(s), last page {fill_display} filled — exceeds target ({pages}). Retrying with LLM...")
+                print("  Running MBP analysis on initial render...")
+                if is_tex:
+                    mbp_analysis = analyze_mbps(output_path, mod_fields)
+                else:
+                    mbp_analysis = analyze_mbps_from_docx(output_path, mod_fields)
+
+                if mbp_analysis is not None:
+                    _ma = mbp_analysis
+                    _ta, _tb, _tc = len(_ma.tier_a), len(_ma.tier_b), len(_ma.tier_c)
+                    print(f"  MBP analysis: {len(_ma.mbp_details)} matched "
+                          f"({_ta} Tier A, {_tb} Tier B, {_tc} Tier C)")
+                    print(f"  Avg chars/bullet line: ~{_ma.avg_chars_per_bullet_line:.0f}  |  "
+                          f"Avg chars/para line: ~{_ma.avg_chars_per_para_line:.0f}  |  "
+                          f"Last page: {_ma.lines_on_last_page} visual lines")
+                    for d in _ma.tier_a:
+                        overflow = d.last_line_text[:60] + ("..." if len(d.last_line_text) > 60 else "")
+                        print(f"    [A] {d.key}: {d.total_chars}ch → {d.visual_line_count} lines, "
+                              f"cap {d.one_line_cap}, cut ≥{d.chars_over}  "
+                              f'overflow: "{overflow}"')
+                    for d in _ma.tier_b:
+                        overflow = d.last_line_text[:60] + ("..." if len(d.last_line_text) > 60 else "")
+                        print(f"    [B] {d.key}: {d.total_chars}ch → {d.visual_line_count} lines, "
+                              f"cap {d.one_line_cap}, cut ≥{d.chars_over}  "
+                              f'overflow: "{overflow}"')
+                else:
+                    print("  MBP analysis unavailable.")
 
                 retry_payload: LLM_I = {
                     **payload,
@@ -171,20 +241,30 @@ def main(
                 print(f"\n--- Retry prompt summary ---")
                 print(f"  Detected : {actual_pages} page(s), last page ~{fill_display} filled  →  Target: {pages} page(s)")
                 print(f"  Model    : {model}  |  moddeg: {mod_deg.value}  |  faux: {faux}")
-                print(f"  Chars    : total={total_chars}  est. to remove=~{chars_to_remove}  (chars_per_page≈{int(chars_per_page)})")
-                print(f"  Strategy : REMOVE_BULLETPOINT + condensing, guided by char delta above")
+                print(f"  Strategy : line-budget — MBP rephrasing + REMOVE_BULLETPOINT")
                 print(f"  Current placeholder char counts (from first LLM response):")
                 _print_placeholder_summary(mod_fields)
                 print()
 
-                llm_retry: LLM_O = CALL_RETRY(
-                    retry_payload,
-                    actual_pages=actual_pages,
-                    target_pages=pages,
-                    chars_to_remove=chars_to_remove,
-                    last_page_fill_pct=fill_pct,
-                    model=model,
-                )
+                if is_tex:
+                    llm_retry: LLM_O = CALL_RETRY_TEX(
+                        retry_payload,
+                        actual_pages=actual_pages,
+                        target_pages=pages,
+                        last_page_fill_pct=fill_pct,
+                        mbp_analysis=mbp_analysis,
+                        model=model,
+                    )
+                else:
+                    llm_retry = CALL_RETRY(
+                        retry_payload,
+                        actual_pages=actual_pages,
+                        target_pages=pages,
+                        last_page_fill_pct=fill_pct,
+                        mbp_analysis=mbp_analysis,
+                        model=model,
+                    )
+
                 retry_fields = llm_retry["placeholders"]
                 print("--- Retry LLM Response ---")
                 print(json.dumps(llm_retry, indent=2))
@@ -199,7 +279,11 @@ def main(
                     metadata={**run_metadata, "suffix": "_retry"},
                 )
 
-                retry_info = get_docx_page_info(retry_output_path)
+                if is_tex:
+                    retry_info = get_pdf_page_info(retry_output_path)
+                else:
+                    retry_info = get_docx_page_info(retry_output_path)
+
                 if retry_info is None:
                     print("Page check after retry: skipped (see warnings above).")
                 else:
@@ -214,22 +298,44 @@ def main(
                             f"after retry (target: {pages})."
                         )
 
-                        # Compute char-reduction target for a potential 2nd retry
-                        r1_total_chars    = sum(len(v) for v in retry_fields.values())
-                        r1_effective      = (retry_pages - 1) + retry_fill_pct
-                        r1_cpt            = r1_total_chars / r1_effective if r1_effective > 0 else r1_total_chars
-                        r1_chars_to_remove = max(1, int(r1_total_chars - pages * r1_cpt))
-
-                        # Detect widow lines (requires a second LibreOffice pass)
-                        print("  Detecting widow lines in retry output...")
-                        widow_lines = detect_widow_lines_from_docx(retry_output_path, retry_fields)
-                        if widow_lines:
-                            print(f"  Widow line candidates: {list(widow_lines.keys())}")
+                        print("  Running MBP analysis on retry output...")
+                        if is_tex:
+                            retry_mbp_analysis = analyze_mbps(retry_output_path, retry_fields)
                         else:
-                            print("  No widow lines detected.")
+                            retry_mbp_analysis = analyze_mbps_from_docx(retry_output_path, retry_fields)
+
+                        if retry_mbp_analysis is not None:
+                            _rma = retry_mbp_analysis
+                            _rta, _rtb = len(_rma.tier_a), len(_rma.tier_b)
+                            mbp_target_keys = [d.key for d in _rma.tier_a + _rma.tier_b]
+                            print(f"  MBP analysis: {len(_rma.mbp_details)} matched "
+                                  f"({_rta} Tier A, {_rtb} Tier B, {len(_rma.tier_c)} Tier C)")
+                            print(f"  Avg chars/bullet line: ~{_rma.avg_chars_per_bullet_line:.0f}  |  "
+                                  f"Avg chars/para line: ~{_rma.avg_chars_per_para_line:.0f}  |  "
+                                  f"Last page: {_rma.lines_on_last_page} visual lines")
+                            for d in _rma.tier_a:
+                                overflow = d.last_line_text[:60] + ("..." if len(d.last_line_text) > 60 else "")
+                                print(f"    [A] {d.key}: {d.total_chars}ch → {d.visual_line_count} lines, "
+                                      f"cap {d.one_line_cap}, cut ≥{d.chars_over}  "
+                                      f'overflow: "{overflow}"')
+                            for d in _rma.tier_b:
+                                overflow = d.last_line_text[:60] + ("..." if len(d.last_line_text) > 60 else "")
+                                print(f"    [B] {d.key}: {d.total_chars}ch → {d.visual_line_count} lines, "
+                                      f"cap {d.one_line_cap}, cut ≥{d.chars_over}  "
+                                      f'overflow: "{overflow}"')
+                        else:
+                            print("  MBP analysis unavailable.")
+                            retry_mbp_analysis = None
+                            mbp_target_keys = []
 
                         print()
-                        if sys.stdin.isatty():
+                        if auto_retry:
+                            answer = "y"
+                            print(
+                                f"  Output is {retry_pages} page(s) (target: {pages}). "
+                                f"Auto-starting second retry (-y flag)."
+                            )
+                        elif sys.stdin.isatty():
                             answer = input(
                                 f"  Output is {retry_pages} page(s) (target: {pages}). "
                                 f"Perform a second retry targeting widow lines? [y/N] "
@@ -250,23 +356,32 @@ def main(
                             print(f"\n--- Second retry prompt summary ---")
                             print(f"  Detected : {retry_pages} page(s), last page ~{retry_fill_display} filled  →  Target: {pages} page(s)")
                             print(f"  Model    : {model}  |  moddeg: {mod_deg.value}  |  faux: {faux}")
-                            print(f"  Chars    : total={r1_total_chars}  est. to remove=~{r1_chars_to_remove}  (chars_per_page≈{int(r1_cpt)})")
-                            print(f"  Strategy : widow line rephrasing first, then REMOVE_BULLETPOINT / condensing")
-                            if widow_lines:
-                                print(f"  Widow targets: {list(widow_lines.keys())}")
+                            print(f"  Strategy : MBP targeted rephrasing + REMOVE_BULLETPOINT")
+                            if mbp_target_keys:
+                                print(f"  MBP targets: {mbp_target_keys}")
                             print(f"  Current placeholder char counts (from first retry):")
                             _print_placeholder_summary(retry_fields)
                             print()
 
-                            llm_retry2: LLM_O = CALL_RETRY2(
-                                second_retry_payload,
-                                actual_pages=retry_pages,
-                                target_pages=pages,
-                                chars_to_remove=r1_chars_to_remove,
-                                last_page_fill_pct=retry_fill_pct,
-                                widow_lines=widow_lines,
-                                model=model,
-                            )
+                            if is_tex:
+                                llm_retry2: LLM_O = CALL_RETRY2_TEX(
+                                    second_retry_payload,
+                                    actual_pages=retry_pages,
+                                    target_pages=pages,
+                                    last_page_fill_pct=retry_fill_pct,
+                                    mbp_analysis=retry_mbp_analysis,
+                                    model=model,
+                                )
+                            else:
+                                llm_retry2 = CALL_RETRY2(
+                                    second_retry_payload,
+                                    actual_pages=retry_pages,
+                                    target_pages=pages,
+                                    last_page_fill_pct=retry_fill_pct,
+                                    mbp_analysis=retry_mbp_analysis,
+                                    model=model,
+                                )
+
                             retry2_fields = llm_retry2["placeholders"]
                             print("--- Second retry LLM response ---")
                             print(json.dumps(llm_retry2, indent=2))
@@ -281,7 +396,11 @@ def main(
                                 metadata={**run_metadata, "suffix": "_retry2"},
                             )
 
-                            retry2_info = get_docx_page_info(retry2_output_path)
+                            if is_tex:
+                                retry2_info = get_pdf_page_info(retry2_output_path)
+                            else:
+                                retry2_info = get_docx_page_info(retry2_output_path)
+
                             if retry2_info is None:
                                 print("Page check after second retry: skipped (see warnings above).")
                             else:
@@ -318,8 +437,11 @@ Examples:
   # Skip LLM, just render template with original placeholders
   python -m backend.main -n -p posting_3.txt -f doc
 
-  # Limit output to 1 page (docx; retries once if exceeded)
-  python -m backend.main -m deepseek/chat -p posting_2.txt --pages 1\
+  # Limit output to 1 page (docx or tex; retries if exceeded)
+  python -m backend.main -m deepseek/chat -p posting_2.txt --pages 1
+
+  # 1-page limit, auto-confirm the second retry without prompting
+  python -m backend.main -m claude/sonnet-4.6 -p posting_1.txt -f tex --pages 1 -y\
 """
 
     if "examples" in sys.argv:
@@ -334,7 +456,8 @@ Examples:
             + "\n".join(f"  {k}" for k in MODELS)
             + "\n\n"
             "Note: -n/--no only accepts -f/--format and -p/--posting.\n"
-            "      --model, --output, --moddeg, --faux, and --pages require an LLM call.\n"
+            "      --model, --output, --moddeg, --faux, --pages, and -y require an LLM call.\n"
+            "      -y/--yes requires --pages (no retry without a page limit).\n"
             "\n"
             "Tip: run with 'examples' to see usage examples.\n"
             "  python -m backend.main examples\n"
@@ -432,9 +555,18 @@ Examples:
         metavar="N",
         help=(
             "Target maximum number of pages for the output (default: no limit). "
-            "Currently only checked for docx output; requires LibreOffice on PATH. "
-            "If the first render exceeds N pages, one retry LLM call is made."
+            "Supported for docx (requires LibreOffice) and tex (pdflatex). "
+            "If the first render exceeds N pages, up to two retry LLM calls are made."
         ),
+    )
+
+    # Auto-retry flag
+    parser.add_argument(
+        "-y", "--yes",
+        dest="auto_retry",
+        action="store_true",
+        default=False,
+        help="Automatically run the second retry without prompting (requires --pages)",
     )
 
     args = parser.parse_args()
@@ -451,6 +583,7 @@ Examples:
             "--moddeg":  args.mod_deg != MOD_DEG.LOW.value,
             "--faux":    args.faux,
             "--pages":   args.pages is not None,
+            "-y/--yes":  args.auto_retry,
         }
         offenders = [flag for flag, was_set in llm_only.items() if was_set]
         if offenders:
@@ -458,6 +591,10 @@ Examples:
                 f"-n/--no cannot be used with: {', '.join(offenders)}  "
                 "(these flags have no effect without an LLM call)"
             )
+
+    # -y requires --pages (otherwise there's no retry to auto-confirm)
+    if args.auto_retry and args.pages is None:
+        parser.error("-y/--yes requires --pages N (no retry occurs without a page limit)")
 
     # Resolve resume template path (mutates module-level globals used by main())
     RESUME_NAME = TEMPLATE_MAP[args.template_format]
@@ -473,7 +610,8 @@ Examples:
         print(f"Output : {args.output_format}")
         print(f"Mod deg: {args.mod_deg}")
         print(f"Faux   : {args.faux}")
-        print(f"Pages  : {args.pages if args.pages is not None else 'no limit'}\n")
+        print(f"Pages  : {args.pages if args.pages is not None else 'no limit'}")
+        print(f"AutoRetry: {args.auto_retry}\n")
         main(
             0,
             model=args.model,
@@ -482,6 +620,7 @@ Examples:
             mod_deg=mod_deg_map[args.mod_deg],
             faux=args.faux,
             pages=args.pages,
+            auto_retry=args.auto_retry,
         )
     else:
         print(f"Posting: {posting_path.name}  (no LLM call)\n")
