@@ -105,6 +105,12 @@ RULES
     - This applies even at faux=false — you are always allowed (and expected) to remove existing
       entries when enough new, more-relevant ones are introduced.
 
+    TYPOGRAPHY (all placeholder values)
+    - Do not use em dashes (U+2014), en dashes (U+2013), figure dashes, or any other long or fancy
+      Unicode hyphen/dash characters. Use a normal ASCII hyphen-minus (-), commas, semicolons, or
+      parentheses to separate clauses instead.
+    - Do not include emojis, emoticons, or kaomoji-style text faces in any placeholder value.
+
     FAILURE GUARDS
     - If a placeholder value was already well-matched to the job posting, keep it or make only
       minor polish edits. Do not rewrite for the sake of rewriting.

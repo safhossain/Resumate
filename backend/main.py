@@ -28,7 +28,8 @@ from backend.parsers_and_generators.file_type_pdf import PDFf
 GATEWAY_DIR       = Path(__file__).resolve().parent
 RESUME_NAME: str  = ""
 RESUME_PATH       = (GATEWAY_DIR / "templates" / "resume" / RESUME_NAME).resolve()
-PLACEHOLDERS_PATH = (GATEWAY_DIR / "fields.json").resolve()
+#PLACEHOLDERS_PATH = (GATEWAY_DIR / "fields.json").resolve()
+PLACEHOLDERS_PATH = (GATEWAY_DIR / "fields_docx.json").resolve()
 POSTING_DIR       = (GATEWAY_DIR / "postings_new").resolve()
 DEFAULT_POSTING   = "posting_1.txt"
 ACC_PATH          = (GATEWAY_DIR / "resources" / "ACC.txt").resolve()
