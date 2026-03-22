@@ -28,8 +28,11 @@ from backend.parsers_and_generators.file_type_pdf import PDFf
 GATEWAY_DIR       = Path(__file__).resolve().parent
 RESUME_NAME: str  = ""
 RESUME_PATH       = (GATEWAY_DIR / "templates" / "resume" / RESUME_NAME).resolve()
-#PLACEHOLDERS_PATH = (GATEWAY_DIR / "fields.json").resolve()
-PLACEHOLDERS_PATH = (GATEWAY_DIR / "fields_docx.json").resolve()
+#---
+PLACEHOLDERS_PATH = (GATEWAY_DIR / "fields.json").resolve()
+#PLACEHOLDERS_PATH = (GATEWAY_DIR / "fields_docx.json").resolve()
+#PLACEHOLDERS_PATH = (GATEWAY_DIR / "fields_txt.json").resolve()
+#---
 POSTING_DIR       = (GATEWAY_DIR / "postings_new").resolve()
 DEFAULT_POSTING   = "posting_1.txt"
 ACC_PATH          = (GATEWAY_DIR / "resources" / "ACC.txt").resolve()
@@ -158,8 +161,12 @@ def main(
                     shutil.rmtree(tmp_dir, ignore_errors=True)
                 print()
 
+            # Page-target + baseline char budgets apply only to docx/tex (--pages pipeline).
+            # TXT uses the same CALL path but should not get PAGE TARGET or baseline metrics in the system prompt.
+            page_hint_for_llm = pages if Handler in (DOCXf, J2f) else None
+
             llm_response: LLM_O = CALL(
-                payload, model=model, page_hint=pages,
+                payload, model=model, page_hint=page_hint_for_llm,
                 baseline_fields=baseline_fields,
             )
             mod_fields   = llm_response["placeholders"]
@@ -458,7 +465,7 @@ Examples:
             + "\n\n"
             "Note: -n/--no only accepts -f/--format and -p/--posting.\n"
             "      --model, --output, --moddeg, --faux, --pages, and -y require an LLM call.\n"
-            "      -y/--yes requires --pages (no retry without a page limit).\n"
+            "      -y/--yes requires --pages for doc/tex; for txt, -y is ignored.\n"
             "\n"
             "Tip: run with 'examples' to see usage examples.\n"
             "  python -m backend.main examples\n"
@@ -556,7 +563,8 @@ Examples:
         metavar="N",
         help=(
             "Target maximum number of pages for the output (default: no limit). "
-            "Supported for docx (requires LibreOffice) and tex (pdflatex). "
+            "Enforced only for docx (requires LibreOffice) and tex (pdflatex); "
+            "txt ignores this for rendering and the LLM system prompt. "
             "If the first render exceeds N pages, up to two retry LLM calls are made."
         ),
     )
@@ -567,7 +575,10 @@ Examples:
         dest="auto_retry",
         action="store_true",
         default=False,
-        help="Automatically run the second retry without prompting (requires --pages)",
+        help=(
+            "Automatically run the second page-limit retry without prompting "
+            "(requires --pages for doc/tex; ignored for txt)"
+        ),
     )
 
     args = parser.parse_args()
@@ -593,9 +604,12 @@ Examples:
                 "(these flags have no effect without an LLM call)"
             )
 
-    # -y requires --pages (otherwise there's no retry to auto-confirm)
-    if args.auto_retry and args.pages is None:
-        parser.error("-y/--yes requires --pages N (no retry occurs without a page limit)")
+    # -y requires --pages for formats that have page-limit retries (not txt).
+    if args.auto_retry and args.pages is None and args.template_format != "txt":
+        parser.error(
+            "-y/--yes requires --pages N for doc/tex (no retry without a page limit); "
+            "for -f txt you may omit --pages — -y is ignored."
+        )
 
     # Resolve resume template path (mutates module-level globals used by main())
     RESUME_NAME = TEMPLATE_MAP[args.template_format]
@@ -606,13 +620,26 @@ Examples:
     mod_deg_map = {m.value: m for m in MOD_DEG}
 
     if args.do_call:
+        # TXT has no page-limit retry path; -y would never apply — drop it before main().
+        auto_retry_effective = args.auto_retry and args.template_format != "txt"
+
         print(f"Model  : {args.model}")
         print(f"Posting: {posting_path.name}")
         print(f"Output : {args.output_format}")
         print(f"Mod deg: {args.mod_deg}")
         print(f"Faux   : {args.faux}")
-        print(f"Pages  : {args.pages if args.pages is not None else 'no limit'}")
-        print(f"AutoRetry: {args.auto_retry}\n")
+        if args.template_format == "txt" and args.pages is not None:
+            print(
+                f"Pages  : {args.pages}  "
+                "(ignored for txt — no pre-render, LLM page target, or retries)"
+            )
+        else:
+            print(f"Pages  : {args.pages if args.pages is not None else 'no limit'}")
+        if args.auto_retry and args.template_format == "txt":
+            print("AutoRetry: off  (txt has no page-limit retries; -y/--yes ignored)")
+        else:
+            print(f"AutoRetry: {auto_retry_effective}")
+        print()
         main(
             0,
             model=args.model,
@@ -621,7 +648,7 @@ Examples:
             mod_deg=mod_deg_map[args.mod_deg],
             faux=args.faux,
             pages=args.pages,
-            auto_retry=args.auto_retry,
+            auto_retry=auto_retry_effective,
         )
     else:
         print(f"Posting: {posting_path.name}  (no LLM call)\n")

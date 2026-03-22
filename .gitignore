@@ -8,5 +8,6 @@ backend/templates/
 backend/clipboard.txt
 backend/fields.json
 backend/fields_docx.json
+backend/fields_txt.json
 backend/fields.txt
 backend/sensitive_fields.json
