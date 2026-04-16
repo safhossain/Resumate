@@ -26,6 +26,7 @@ from backend.parsers_and_generators.file_type_docx import DOCXf
 from backend.parsers_and_generators.file_type_pdf import PDFf
 
 GATEWAY_DIR       = Path(__file__).resolve().parent
+PROJECT_ROOT      = GATEWAY_DIR.parent
 RESUME_NAME: str  = ""
 RESUME_PATH       = (GATEWAY_DIR / "templates" / "resume" / RESUME_NAME).resolve()
 #---
@@ -35,6 +36,40 @@ PLACEHOLDERS_PATH = (GATEWAY_DIR / "fields.json").resolve()
 #---
 POSTING_DIR       = (GATEWAY_DIR / "postings_new").resolve()
 DEFAULT_POSTING   = "posting_1.txt"
+
+
+def resolve_posting_path(raw: str) -> Path:
+    """Resolve a job posting file to an absolute path.
+
+    Accepts:
+    - Absolute paths
+    - Paths relative to the current working directory
+    - Paths relative to the project root (parent of ``backend/``)
+    - A bare filename: still resolved under ``backend/postings_new/`` if present
+      (backward compatible with ``-p posting_1.txt``).
+    """
+    p = Path(raw).expanduser()
+    if p.is_absolute():
+        return p.resolve()
+    rel = p
+    for base in (Path.cwd(), PROJECT_ROOT):
+        candidate = (base / rel).resolve()
+        if candidate.is_file():
+            return candidate
+    if len(rel.parts) == 1:
+        legacy = (POSTING_DIR / rel.name).resolve()
+        if legacy.is_file():
+            return legacy
+    return (PROJECT_ROOT / rel).resolve()
+
+
+def _display_posting_path(p: Path) -> str:
+    try:
+        return str(p.relative_to(PROJECT_ROOT))
+    except ValueError:
+        return str(p)
+
+
 ACC_PATH          = (GATEWAY_DIR / "resources" / "ACC.txt").resolve()
 SENSITIVE_PATH    = (GATEWAY_DIR / "sensitive_fields.json").resolve()
 OUTPUT_DIR        = (GATEWAY_DIR / "outputs").resolve()
@@ -528,11 +563,12 @@ Examples:
         "-p", "--posting",
         dest="posting",
         default=DEFAULT_POSTING,
-        metavar="FILENAME",
+        metavar="PATH",
         help=(
-            f"Job posting filename inside postings_new/ "
-            f"(default: {DEFAULT_POSTING}). "
-            "Example: -p posting_3.txt"
+            "Path to the job posting .txt file. Relative paths are resolved against the "
+            "current directory, then the project root (parent of backend/). "
+            f"A bare filename still checks backend/postings_new/ first (default: {DEFAULT_POSTING}). "
+            "Examples: -p posting_3.txt  |  -p backend/postings_new/posting_3.txt  |  -p other/post.txt"
         ),
     )
 
@@ -615,7 +651,9 @@ Examples:
     RESUME_NAME = TEMPLATE_MAP[args.template_format]
     RESUME_PATH = (GATEWAY_DIR / "templates" / "resume" / RESUME_NAME).resolve()
 
-    posting_path = (POSTING_DIR / Path(args.posting).name).resolve()
+    posting_path = resolve_posting_path(args.posting)
+    if not posting_path.is_file():
+        parser.error(f"Posting file not found: {posting_path}")
 
     mod_deg_map = {m.value: m for m in MOD_DEG}
 
@@ -624,7 +662,7 @@ Examples:
         auto_retry_effective = args.auto_retry and args.template_format != "txt"
 
         print(f"Model  : {args.model}")
-        print(f"Posting: {posting_path.name}")
+        print(f"Posting: {_display_posting_path(posting_path)}")
         print(f"Output : {args.output_format}")
         print(f"Mod deg: {args.mod_deg}")
         print(f"Faux   : {args.faux}")
@@ -651,5 +689,5 @@ Examples:
             auto_retry=auto_retry_effective,
         )
     else:
-        print(f"Posting: {posting_path.name}  (no LLM call)\n")
+        print(f"Posting: {_display_posting_path(posting_path)}  (no LLM call)\n")
         main(1, job_posting_path=posting_path)

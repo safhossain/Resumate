@@ -1,0 +1,29 @@
+Software Engineer - Boomi or BTP
+
+Job ID 318097 Date posted 03/03/2026 Location : Atlanta, Georgia Category  DIGITAL TECHNOLOGY AND DATA (DT&D) Job Status  Salaried Full Time
+
+Cargill’s size and scale allows us to make a positive impact in the world. Our purpose is to nourish the world in a safe, responsible and sustainable way. We are a family company providing food, ingredients, agricultural solutions and industrial products that are vital for living. We connect farmers with markets so they can prosper. We connect customers with ingredients so they can make meals people love. And we connect families with daily essentials — from eggs to edible oils, salt to skincare, feed to alternative fuel. Our 160,000 colleagues, operating in 70 countries, make essential products that touch billions of lives each day. Join us and reach your higher purpose at Cargill.
+Job Purpose and Impact
+
+    The Professional, Software Engineering job maintains and partners to design and develop software applications and systems. With limited supervision, this job collaborates with cross functional teams to implement new software features to meet user needs and business goals and upgrade existing software to improve performance and functionality through writing clean, efficient and scalable code and troubleshooting and debugging moderately complex issues. This job also participates in code reviews to maintain high code quality and share knowledge with software engineering team members. 
+
+Key Accountabilities
+
+    SOFTWARE DEVELOPMENT: Partners to design and develop high quality software solutions by writing clean, maintainable and efficient codes.
+    AUTOMATION: Applies internal software deployment platform, methodologies and tools to automate the deployment process, ensuring smooth and reliable releases.
+    COLLABORATION: Partners with cross functional team of product managers, designers and other engineers to gather moderately complex requirements and deliver solutions that meet business needs.
+    TESTING & DEBUGGING: Writes and maintains moderately complex unit tests and integration tests, and performs debugging to maintain the quality and performance of the software.
+    CONTINUOUS IMPROVEMENT: Makes suggestions for improving the software development and deployment processes, and implements the approved standards to improve efficiency and reliability.
+    DOCUMENTATION: Drafts and maintains comprehensive documentation for moderately complex software applications, deployment processes and system configurations.
+    TECHNICAL SUPPORT: Provides technical support and troubleshooting for moderately complex issues with deployed applications to ensure minimal downtime and fast resolution. 
+
+Qualifications
+
+    Minimum requirement of 2 years of relevant work experience. Typically reflects 3 years or more of relevant experience.
+
+Preferred Qualifications:
+
+    SAP BTP and/or Boomi expertise.
+    4+ years of experience in software development.
+
+Equal Opportunity Employer, including Disability/Vet.
