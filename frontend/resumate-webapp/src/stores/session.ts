@@ -140,6 +140,10 @@ export const useSessionStore = defineStore('session', () => {
     documentStructure.value = data.document_structure
     placeholders.value = data.placeholders as Record<string, PlaceholderResponse>
     texPdfUrl.value = data.tex_pdf_url
+
+    // Restore persisted ACC into the pipeline store (lazy import avoids circular dep)
+    const { usePipelineStore } = await import('./pipeline')
+    usePipelineStore().acc = data.acc ?? ''
   }
 
   async function removeSession(id: string) {

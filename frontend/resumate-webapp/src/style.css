@@ -84,6 +84,16 @@
   display: inline;
 }
 
+/* Visual-only bullet marker — not in DOM, not selectable, no offset impact */
+.resume-bullet::before {
+  content: "•";
+  margin-right: 0.45em;
+  opacity: 0.55;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
 /* heading styles for docx */
 .resume-h1 { font-size: 1.5rem; font-weight: 700; }
 .resume-h2 { font-size: 1.25rem; font-weight: 600; }

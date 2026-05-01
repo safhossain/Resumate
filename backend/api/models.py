@@ -105,6 +105,7 @@ class SessionDetail(BaseModel):
     template_generated: bool
     outputs: list
     tex_pdf_url: Optional[str] = None
+    acc: str = ""
 
 
 class SessionSaveRequest(BaseModel):

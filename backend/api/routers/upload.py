@@ -46,6 +46,12 @@ def _process_docx(file_path: Path) -> tuple[str, list[dict], str]:
         elif "heading 3" in style_name:
             extra_cls = " resume-h3"
 
+        # Detect bullet/numbered paragraphs via <w:numPr> — purely visual flag.
+        _WNS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+        _pPr = para._p.find(f"{{{_WNS}}}pPr")
+        if _pPr is not None and _pPr.find(f"{{{_WNS}}}numPr") is not None:
+            extra_cls += " resume-bullet"
+
         elem_id = f"p_{i}"
         html_parts.append(
             f'<div data-element-id="{elem_id}" data-offset="{offset}"'

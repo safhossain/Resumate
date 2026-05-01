@@ -97,6 +97,7 @@ export interface SessionDetail {
   template_generated: boolean
   outputs: unknown[]
   tex_pdf_url: string | null
+  acc: string
 }
 
 export interface ModelsResponse {
@@ -176,6 +177,14 @@ export function saveSession(sessionId: string, name?: string): Promise<{ ok: boo
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name }),
+  })
+}
+
+export function updateSessionAcc(sessionId: string, acc: string): Promise<{ ok: boolean }> {
+  return request(`/sessions/${sessionId}/acc`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ acc }),
   })
 }
 

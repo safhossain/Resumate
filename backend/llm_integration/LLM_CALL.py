@@ -45,8 +45,11 @@ OUTPUT
 {get_LLM_O_str}
 
     - "placeholders": return every key from the input "placeholders" object, with updated values.
-    - "changes_made": a concise summary of what was changed and why. If no meaningful changes were
-      warranted, return "None: <reason>".
+    - "changes_made": a numbered list, one entry per placeholder key, in the format:
+        1. key_name: <what changed and why>
+        2. key_name: NONE
+      Include every key that was changed with a brief reason. For keys left unchanged, write NONE.
+      If no placeholder was changed at all, write a single line: "No changes were made: <reason>".
 
 ------------------------------------------------------------
 MODIFICATION DEGREE (mod_deg)
@@ -105,11 +108,12 @@ RULES
     - This applies even at faux=false — you are always allowed (and expected) to remove existing
       entries when enough new, more-relevant ones are introduced.
 
-    TYPOGRAPHY (all placeholder values)
-    - Do not use em dashes (U+2014), en dashes (U+2013), figure dashes, or any other long or fancy
-      Unicode hyphen/dash characters. Use a normal ASCII hyphen-minus (-), commas, semicolons, or
-      parentheses to separate clauses instead.
-    - Do not include emojis, emoticons, or kaomoji-style text faces in any placeholder value.
+    TYPOGRAPHY (all placeholder values and changes_made)
+    - Do not use em dashes (U+2014), en dashes (U+2013), figure dashes, horizontal bars (U+2015),
+      or any other long or fancy Unicode hyphen/dash characters. Use a normal ASCII hyphen-minus (-),
+      commas, semicolons, or parentheses to separate clauses instead.
+    - Do not include emojis, emoticons, or kaomoji-style text faces in any placeholder value or in
+      changes_made.
 
     FAILURE GUARDS
     - If a placeholder value was already well-matched to the job posting, keep it or make only

@@ -1,10 +1,11 @@
 import { defineStore } from 'pinia'
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import type { TailorResponse, ModelsResponse } from '../api/client'
 import {
   tailorResume as apiTailor,
   retryTailor as apiRetry,
   fetchModels as apiFetchModels,
+  updateSessionAcc as apiUpdateAcc,
 } from '../api/client'
 import { useSessionStore } from './session'
 
@@ -20,12 +21,27 @@ export const usePipelineStore = defineStore('pipeline', () => {
   const acc = ref('')
 
   /* ── pipeline state ─────────────────────────────────────────────── */
+  /* ── ui prefs ───────────────────────────────────────────────────── */
+  const quickLabel = ref(true)
+
+  /* ── pipeline state ─────────────────────────────────────────────── */
   const isTailoring = ref(false)
   const isRetrying = ref(false)
   const latestOutput = ref<TailorResponse | null>(null)
   const error = ref<string | null>(null)
 
   /* ── actions ────────────────────────────────────────────────────── */
+
+  /* ── persist ACC to session on change (debounced 1 s) ──────────── */
+  let _accSaveTimer: ReturnType<typeof setTimeout> | null = null
+  watch(acc, (value) => {
+    const session = useSessionStore()
+    if (!session.sessionId) return
+    if (_accSaveTimer) clearTimeout(_accSaveTimer)
+    _accSaveTimer = setTimeout(() => {
+      apiUpdateAcc(session.sessionId!, value).catch(() => { /* silent */ })
+    }, 1000)
+  })
 
   async function loadModels() {
     try {
@@ -93,6 +109,7 @@ export const usePipelineStore = defineStore('pipeline', () => {
     pages,
     jobPosting,
     acc,
+    quickLabel,
     isTailoring,
     isRetrying,
     latestOutput,

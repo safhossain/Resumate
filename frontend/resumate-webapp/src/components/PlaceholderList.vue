@@ -1,8 +1,21 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, watch, nextTick } from 'vue'
 import { useSessionStore, sanitizeKey } from '../stores/session'
 
 const session = useSessionStore()
+
+/* ── autoscroll ───────────────────────────────────────────────────── */
+const autoscroll = ref(true)
+const listEl = ref<HTMLUListElement | null>(null)
+
+watch(
+  () => session.placeholderList.length,
+  async () => {
+    if (!autoscroll.value || !listEl.value) return
+    await nextTick()
+    listEl.value.scrollTop = listEl.value.scrollHeight
+  },
+)
 
 /* ── per-row rename state ─────────────────────────────────────────── */
 const editingKey = ref<string | null>(null)
@@ -58,9 +71,22 @@ function onKeydown(e: KeyboardEvent) {
 
 <template>
   <div class="p-4 border-b border-gray-800" v-if="session.placeholderList.length">
-    <p class="text-xs text-gray-500 mb-2 uppercase tracking-wider">Placeholders</p>
+    <div class="flex items-center justify-between mb-2">
+      <p class="text-xs text-gray-500 uppercase tracking-wider">Placeholders</p>
+      <label
+        class="flex items-center gap-1.5 text-[10px] text-gray-600 cursor-pointer select-none"
+        title="Scroll to the newest placeholder when one is added"
+      >
+        <input
+          v-model="autoscroll"
+          type="checkbox"
+          class="accent-blue-500 w-3 h-3"
+        />
+        Autoscroll
+      </label>
+    </div>
 
-    <ul class="space-y-1.5 max-h-56 overflow-y-auto">
+    <ul ref="listEl" class="space-y-1.5 max-h-56 overflow-y-auto">
       <li
         v-for="ph in session.placeholderList"
         :key="ph.key"

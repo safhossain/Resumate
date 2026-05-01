@@ -48,6 +48,16 @@ const moddegOptions = [
       Faux
     </label>
 
+    <!-- quick label -->
+    <label class="flex items-center gap-1.5 text-xs text-gray-400 cursor-pointer select-none" title="When on, you can type a custom name right after marking a selection">
+      <input
+        v-model="pipeline.quickLabel"
+        type="checkbox"
+        class="accent-blue-500 w-3.5 h-3.5"
+      />
+      Quick&nbsp;label
+    </label>
+
     <!-- pages -->
     <label class="flex items-center gap-1.5 text-xs text-gray-400">
       Pages

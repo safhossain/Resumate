@@ -9,6 +9,16 @@ const session = useSessionStore()
 const canTailor = computed(
   () => session.hasSession && session.placeholderList.length > 0 && pipeline.jobPosting.trim().length > 0,
 )
+
+const disabledReason = computed(() => {
+  if (pipeline.isTailoring) return 'Tailoring in progress…'
+  const missing: string[] = []
+  if (!session.hasSession) missing.push('upload a resume')
+  if (!session.placeholderList.length) missing.push('add at least one placeholder')
+  if (!pipeline.jobPosting.trim()) missing.push('paste a job posting')
+  if (!missing.length) return ''
+  return 'To tailor: ' + missing.join(', and ') + '.'
+})
 </script>
 
 <template>
@@ -33,6 +43,7 @@ const canTailor = computed(
     <!-- tailor button -->
     <button
       :disabled="!canTailor || pipeline.isTailoring"
+      :title="disabledReason"
       class="mt-4 w-full py-2.5 rounded-lg font-semibold text-sm transition-colors"
       :class="canTailor && !pipeline.isTailoring
         ? 'bg-blue-600 hover:bg-blue-500 text-white cursor-pointer'
@@ -49,6 +60,7 @@ const canTailor = computed(
       <span v-else>Tailor Resume</span>
     </button>
 
+    <p v-if="disabledReason && !pipeline.isTailoring" class="mt-2 text-xs text-gray-600 leading-relaxed">{{ disabledReason }}</p>
     <p v-if="pipeline.error" class="mt-2 text-xs text-red-400">{{ pipeline.error }}</p>
   </div>
 </template>

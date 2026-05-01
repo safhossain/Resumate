@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
 
 from ..models import (
     DocumentElement,
@@ -39,6 +40,7 @@ async def get_session(session_id: str):
         template_generated=data["template_generated"],
         outputs=data["outputs"],
         tex_pdf_url=data.get("tex_pdf_url"),
+        acc=data.get("acc", ""),
     )
 
 
@@ -53,6 +55,19 @@ async def save_session(session_id: str, body: SessionSaveRequest):
     if body.name is not None:
         updates["name"] = body.name
     session_store.update_session(session_id, updates)
+    return {"ok": True}
+
+
+class AccUpdateRequest(BaseModel):
+    acc: str
+
+
+@router.patch("/sessions/{session_id}/acc")
+async def update_session_acc(session_id: str, body: AccUpdateRequest):
+    try:
+        session_store.update_session(session_id, {"acc": body.acc})
+    except FileNotFoundError:
+        raise HTTPException(404, "Session not found")
     return {"ok": True}
 
 
