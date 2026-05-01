@@ -1,6 +1,8 @@
 **/.env
 **/.env.*
 **/__pycache__/
+node_modules/
+package-lock.json
 backend/outputs/
 backend/postings_new/
 backend/resources/

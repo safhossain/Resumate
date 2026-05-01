@@ -16,6 +16,15 @@ const popover = ref<{
   endOffset: number
 } | null>(null)
 
+/* ── ephemeral toast for placeholder errors ─────────────────────── */
+const toast = ref<string | null>(null)
+let toastTimer: ReturnType<typeof setTimeout> | null = null
+function showToast(message: string, ms = 5500) {
+  toast.value = message
+  if (toastTimer) clearTimeout(toastTimer)
+  toastTimer = setTimeout(() => { toast.value = null }, ms)
+}
+
 /* ── dismiss popover on outside click ───────────────────────────── */
 
 function onDocumentMouseDown(e: MouseEvent) {
@@ -39,11 +48,62 @@ function findOffsetAncestor(node: Node): HTMLElement | null {
   return null
 }
 
+/**
+ * Compute the character offset within `element` that corresponds to a DOM
+ * (node, offset) pair, treating <br> as a single "\n" character.
+ *
+ * Range.toString() does NOT include line breaks for <br>, but our raw_text
+ * does (one "\n" per soft line break inside a paragraph). So we cannot use
+ * Range.toString().length here — it would be off by 1 per <br> traversed.
+ */
 function charOffsetInElement(element: HTMLElement, targetNode: Node, targetOffset: number): number {
-  const r = document.createRange()
-  r.selectNodeContents(element)
-  r.setEnd(targetNode, targetOffset)
-  return r.toString().length
+  // Length contribution of an entire subtree (text + <br>=1).
+  function subtreeLength(node: Node): number {
+    if (node.nodeType === Node.TEXT_NODE) return (node.textContent || '').length
+    if (node.nodeName === 'BR') return 1
+    let total = 0
+    for (let i = 0; i < node.childNodes.length; i++) {
+      total += subtreeLength(node.childNodes[i])
+    }
+    return total
+  }
+
+  let count = 0
+  let done = false
+
+  function walk(node: Node): void {
+    if (done) return
+
+    if (node === targetNode) {
+      if (node.nodeType === Node.TEXT_NODE) {
+        count += targetOffset
+      } else {
+        // Element node: targetOffset is the index of its child boundaries.
+        for (let i = 0; i < targetOffset; i++) {
+          count += subtreeLength(node.childNodes[i])
+        }
+      }
+      done = true
+      return
+    }
+
+    if (node.nodeType === Node.TEXT_NODE) {
+      count += (node.textContent || '').length
+      return
+    }
+    if (node.nodeName === 'BR') {
+      count += 1
+      return
+    }
+
+    for (let i = 0; i < node.childNodes.length; i++) {
+      walk(node.childNodes[i])
+      if (done) return
+    }
+  }
+
+  walk(element)
+  return count
 }
 
 function getSelectionInfo(): { text: string; start: number; end: number } | null {
@@ -51,8 +111,7 @@ function getSelectionInfo(): { text: string; start: number; end: number } | null
   if (!sel || sel.isCollapsed || !sel.rangeCount) return null
 
   const range = sel.getRangeAt(0)
-  const text = sel.toString()
-  if (!text.trim()) return null
+  if (!sel.toString().trim()) return null
 
   const startEl = findOffsetAncestor(range.startContainer)
   const endEl = findOffsetAncestor(range.endContainer)
@@ -64,11 +123,16 @@ function getSelectionInfo(): { text: string; start: number; end: number } | null
   const startLocal = charOffsetInElement(startEl, range.startContainer, range.startOffset)
   const endLocal = charOffsetInElement(endEl, range.endContainer, range.endOffset)
 
-  return {
-    text,
-    start: startElOffset + startLocal,
-    end: endElOffset + endLocal,
-  }
+  const start = startElOffset + startLocal
+  const end = endElOffset + endLocal
+  if (end <= start) return null
+
+  // Derive text from raw_text so it always matches the offsets exactly
+  // (incl. \t and \n characters, which DOM Selection may normalise).
+  const text = session.rawText.slice(start, end)
+  if (!text) return null
+
+  return { text, start, end }
 }
 
 /* ── popover on text selection ──────────────────────────────────── */
@@ -113,10 +177,18 @@ async function markAs(type: 'tailor' | 'sensitive') {
       popover.value.endOffset,
       type,
     )
+    closePopover()
   } catch (e) {
     console.error('Failed to add placeholder:', e)
+    const raw = e instanceof Error ? e.message : String(e)
+    // Server returns "<status>: <body>" — try to extract just the human bit.
+    const friendly =
+      /400/.test(raw)
+        ? "This selection couldn't be mapped back to the document — likely a tab, soft line break, or other formatting edge case we don't yet support. Try selecting a slightly different region. (We're working on covering more cases.)"
+        : `Couldn't add placeholder: ${raw}`
+    showToast(friendly)
+    closePopover()
   }
-  closePopover()
 }
 
 /* ── highlight injection ────────────────────────────────────────── */
@@ -273,8 +345,36 @@ const overlappingKey = computed(() => {
             >i</span>
             <span><b class="text-amber-400">Sensitive</b> rows show your <b class="text-gray-400">highlight</b> above and a <b class="text-gray-400">text field</b> below. That field is the value stitched into the output (not sent to the LLM). It starts as a copy of the highlight. Change it if the resume shows a placeholder or you want different wording in the final file.</span>
           </p>
+          <p
+            class="mt-2.5 pt-2 border-t border-gray-700/50 flex gap-2 text-[10px] text-gray-500 leading-relaxed"
+            role="note"
+          >
+            <span
+              class="flex-shrink-0 w-4 h-4 rounded-full border border-gray-600 text-gray-400 flex items-center justify-center text-[9px] font-semibold font-sans"
+              aria-label="Placeholder naming tip"
+            >i</span>
+            <span><b class="text-gray-400">Auto-naming</b> picks a short key from what you highlighted (e.g. obvious email/phone/URL-style snippets get simple names; longer text uses the most salient words). Keys are always <b class="text-gray-400">lowercase</b> with <b class="text-gray-400">underscores only</b>—spaces and hyphens become underscores. <b class="text-gray-400">Rename</b> anytime: in <b class="text-gray-400">Placeholders</b>, click a key name, edit, then press Enter or click away to save.</span>
+          </p>
         </div>
       </div>
+    </div>
+
+    <!-- transient error toast -->
+    <div
+      v-if="toast"
+      class="absolute top-3 right-3 z-50 max-w-sm rounded-lg border border-red-800/60 bg-red-950/90 backdrop-blur px-3 py-2 shadow-lg flex items-start gap-2"
+      role="alert"
+    >
+      <span
+        class="flex-shrink-0 w-4 h-4 rounded-full border border-red-400/60 text-red-300 flex items-center justify-center text-[9px] font-semibold font-sans mt-0.5"
+        aria-hidden="true"
+      >!</span>
+      <p class="text-[11px] text-red-200 leading-relaxed flex-1">{{ toast }}</p>
+      <button
+        class="text-red-400 hover:text-red-200 text-xs flex-shrink-0 leading-none"
+        title="Dismiss"
+        @click="toast = null"
+      >✕</button>
     </div>
 
     <!-- popover -->

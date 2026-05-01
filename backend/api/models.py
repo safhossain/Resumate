@@ -73,6 +73,7 @@ class TailorResponse(BaseModel):
     page_info: Optional[PageInfoResponse] = None
     can_retry: bool = False
     retry_number: int = 0
+    changes_made: Optional[str] = None
 
 
 class RetryRequest(BaseModel):

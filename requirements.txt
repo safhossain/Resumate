@@ -12,3 +12,4 @@ uvicorn[standard]
 python-multipart
 mammoth
 beautifulsoup4
+yake

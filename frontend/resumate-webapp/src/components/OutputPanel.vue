@@ -1,7 +1,9 @@
 <script setup lang="ts">
+import { ref } from 'vue'
 import { usePipelineStore } from '../stores/pipeline'
 
 const pipeline = usePipelineStore()
+const activeTab = ref<'output' | 'changes'>('output')
 </script>
 
 <template>
@@ -9,11 +11,33 @@ const pipeline = usePipelineStore()
     v-if="pipeline.latestOutput"
     class="border-t border-gray-800 bg-gray-900/80 max-h-72 overflow-y-auto"
   >
+    <!-- sticky header ------------------------------------------------ -->
     <div class="flex items-center justify-between px-5 py-2 border-b border-gray-800 bg-gray-900 sticky top-0 z-10">
       <div class="flex items-center gap-3">
-        <span class="text-xs font-semibold text-gray-400 uppercase tracking-wider">Output</span>
 
-        <!-- page info -->
+        <!-- tabs -->
+        <div class="flex gap-1">
+          <button
+            class="text-xs font-semibold uppercase tracking-wider px-2.5 py-0.5 rounded transition-colors"
+            :class="activeTab === 'output'
+              ? 'bg-gray-700 text-gray-200'
+              : 'text-gray-500 hover:text-gray-300'"
+            @click="activeTab = 'output'"
+          >
+            Output
+          </button>
+          <button
+            class="text-xs font-semibold uppercase tracking-wider px-2.5 py-0.5 rounded transition-colors"
+            :class="activeTab === 'changes'
+              ? 'bg-gray-700 text-gray-200'
+              : 'text-gray-500 hover:text-gray-300'"
+            @click="activeTab = 'changes'"
+          >
+            Changes Made
+          </button>
+        </div>
+
+        <!-- page info badge -->
         <span
           v-if="pipeline.latestOutput.page_info"
           class="text-xs px-2 py-0.5 rounded-full"
@@ -58,7 +82,22 @@ const pipeline = usePipelineStore()
       </div>
     </div>
 
-    <!-- preview -->
-    <div class="p-5 prose prose-invert prose-sm max-w-none" v-html="pipeline.latestOutput.preview_html" />
+    <!-- tab content -------------------------------------------------- -->
+
+    <!-- Output -->
+    <div
+      v-if="activeTab === 'output'"
+      class="p-5 prose prose-invert prose-sm max-w-none"
+      v-html="pipeline.latestOutput.preview_html"
+    />
+
+    <!-- Changes Made -->
+    <div v-else class="p-5">
+      <p
+        v-if="pipeline.latestOutput.changes_made"
+        class="text-sm text-gray-300 leading-relaxed whitespace-pre-wrap"
+      >{{ pipeline.latestOutput.changes_made }}</p>
+      <p v-else class="text-sm text-gray-500 italic">No changes summary returned.</p>
+    </div>
   </div>
 </template>

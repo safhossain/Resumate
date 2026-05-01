@@ -288,6 +288,7 @@ async def tailor(req: TailorRequest):
 
     llm_resp = CALL(payload, model=model, page_hint=page_hint, baseline_fields=baseline_fields)
     mod_fields = llm_resp["placeholders"]
+    changes_made: str = llm_resp.get("changes_made", "")
 
     run_ts = int(time.time())
     output_id = uuid.uuid4().hex[:8]
@@ -336,6 +337,7 @@ async def tailor(req: TailorRequest):
                     model=model,
                 )
                 mod_fields = retry_resp["placeholders"]
+                changes_made = retry_resp.get("changes_made", changes_made)
                 clean_ctx = _build_context(mod_fields, sensitive_fields)
 
                 handler2 = _handler_for(fmt, template_path, out_dir)
@@ -380,6 +382,7 @@ async def tailor(req: TailorRequest):
         page_info=page_info_resp,
         can_retry=can_retry,
         retry_number=retry_number,
+        changes_made=changes_made or None,
     )
 
 
@@ -449,6 +452,7 @@ async def retry(req: RetryRequest):
     )
 
     new_mod = llm_resp["placeholders"]
+    changes_made_retry: str = llm_resp.get("changes_made", "")
     retry_number = prev_output["retry_number"] + 1
     run_ts = int(time.time())
     output_id = uuid.uuid4().hex[:8]
@@ -503,6 +507,7 @@ async def retry(req: RetryRequest):
         page_info=page_info_resp,
         can_retry=can_retry,
         retry_number=retry_number,
+        changes_made=changes_made_retry or None,
     )
 
 

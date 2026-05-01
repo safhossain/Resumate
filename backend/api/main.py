@@ -1,5 +1,13 @@
 """FastAPI application — launch with:  uvicorn backend.api.main:app --reload"""
 
+from dotenv import load_dotenv
+from pathlib import Path
+
+# Load the .env that lives alongside the AI API scripts — works regardless of
+# where uvicorn is launched from.
+_env_file = Path(__file__).resolve().parent.parent / "llm_integration" / "AI_API" / ".env"
+load_dotenv(_env_file)
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles

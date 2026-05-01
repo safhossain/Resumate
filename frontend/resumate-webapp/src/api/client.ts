@@ -70,6 +70,7 @@ export interface TailorResponse {
   page_info: PageInfo | null
   can_retry: boolean
   retry_number: number
+  changes_made: string | null
 }
 
 export interface SessionSummary {
@@ -133,6 +134,17 @@ export function updatePlaceholderType(
   return request(`/placeholder/${sessionId}/${key}/type?new_type=${newType}`, {
     method: 'PATCH',
   })
+}
+
+export function renamePlaceholder(
+  sessionId: string,
+  key: string,
+  newKey: string,
+): Promise<PlaceholderResponse> {
+  return request(
+    `/placeholder/${sessionId}/${encodeURIComponent(key)}/rename?new_key=${encodeURIComponent(newKey)}`,
+    { method: 'PATCH' },
+  )
 }
 
 export function tailorResume(data: TailorRequest): Promise<TailorResponse> {

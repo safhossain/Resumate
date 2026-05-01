@@ -9,27 +9,78 @@ from .. import session_store
 
 router = APIRouter()
 
+# ── key sanitization ────────────────────────────────────────────────
+
+_INVALID_CHARS = re.compile(r"[^a-z0-9_]")
+_MULTI_UNDER  = re.compile(r"_+")
+
+def sanitize_key(raw: str) -> str:
+    """Return a lowercase identifier: only a-z, 0-9, underscore; no leading/trailing underscores."""
+    s = raw.lower()
+    s = s.replace("-", "_").replace(" ", "_")
+    s = _INVALID_CHARS.sub("_", s)
+    s = _MULTI_UNDER.sub("_", s)
+    return s.strip("_") or "field"
+
+
+# ── YAKE-backed auto-naming ─────────────────────────────────────────
+
+# Fast structural detectors that beat keyword extraction for known patterns
+_RE_EMAIL   = re.compile(r"[\w.+-]+@[\w-]+\.[\w.]+")
+_RE_PHONE   = re.compile(r"(\+?\d[\d\s\-().]{7,})")
+_RE_URL     = re.compile(r"https?://|www\.|linkedin\.com|github\.com", re.I)
+_RE_LABELED = re.compile(r"^([^:]{1,40}):", re.I)   # "Frameworks: …"
+
+# YAKE extractor – instantiated once, thread-safe for reads
+try:
+    import yake as _yake
+    _YAKE = _yake.KeywordExtractor(lan="en", n=2, dedupLim=0.7, top=3, features=None)
+except Exception:
+    _YAKE = None
+
+
+def _yake_base(text: str) -> str | None:
+    if _YAKE is None:
+        return None
+    try:
+        kws = _YAKE.extract_keywords(text)
+        if not kws:
+            return None
+        best = min(kws, key=lambda x: x[1])[0]
+        return sanitize_key(best)[:30] or None
+    except Exception:
+        return None
+
 
 def _suggest_key(text: str, existing_keys: set[str]) -> str:
-    """Heuristic key name based on selected text content."""
     stripped = text.strip()
 
-    if re.search(r"[\w.+-]+@[\w-]+\.[\w.]+", stripped):
+    # ── fast structural checks (no model needed) ──────────────────
+    if _RE_EMAIL.search(stripped):
         base = "email"
-    elif re.search(r"(\+?\d[\d\s\-().]{7,})", stripped):
+    elif _RE_PHONE.search(stripped):
         base = "phone"
-    elif len(stripped.split()) <= 4 and stripped.istitle():
-        base = "name"
-    elif stripped.lower().startswith(("skill", "technologies", "tech stack")):
-        base = "skills"
-    elif len(stripped) > 200:
+    elif _RE_URL.search(stripped):
+        # Turn URL path into a slug: strip protocol, swap / and - for _
+        slug = re.sub(r"https?://", "", stripped.lower())
+        slug = re.sub(r"[^a-z0-9]+", "_", slug).strip("_")[:30]
+        base = slug or "url"
+    elif m := _RE_LABELED.match(stripped):
+        # "Frameworks and Libraries: …" → "frameworks_and_libraries"
+        base = sanitize_key(m.group(1))[:30] or "field"
+    elif len(stripped) > 300:
         base = "summary"
-    elif len(stripped.split()) <= 2:
-        base = re.sub(r"\W+", "_", stripped.lower()).strip("_")[:20] or "field"
     else:
-        words = stripped.split()[:3]
-        base = "_".join(re.sub(r"\W+", "", w.lower()) for w in words if w)[:20] or "field"
+        # ── YAKE keyword extraction ───────────────────────────────
+        ybase = _yake_base(stripped)
+        if ybase:
+            base = ybase
+        else:
+            # Fallback: first 3 words slugified
+            words = stripped.split()[:3]
+            base = sanitize_key(" ".join(words))[:30] or "field"
 
+    # ── uniqueness suffix ─────────────────────────────────────────
     candidate = base
     counter = 2
     while candidate in existing_keys:
@@ -78,7 +129,12 @@ async def add_placeholder(body: PlaceholderCreate):
             )
 
     existing_keys = set(session["placeholders"].keys())
-    key = body.key or _suggest_key(body.selected_text, existing_keys)
+    if body.key:
+        key = sanitize_key(body.key)
+        if not key:
+            raise HTTPException(400, "Key is empty after sanitization")
+    else:
+        key = _suggest_key(body.selected_text, existing_keys)
 
     if key in existing_keys:
         raise HTTPException(409, f"Key '{key}' already exists")
@@ -93,6 +149,29 @@ async def add_placeholder(body: PlaceholderCreate):
         value=body.value,
     )
 
+    return PlaceholderResponse(
+        key=ph["key"],
+        type=ph["type"],
+        selected_text=ph["selected_text"],
+        start_offset=ph["start_offset"],
+        end_offset=ph["end_offset"],
+        value=ph.get("value"),
+    )
+
+
+@router.patch("/placeholder/{session_id}/{key}/rename")
+async def rename_placeholder(session_id: str, key: str, new_key: str):
+    clean = sanitize_key(new_key)
+    if not clean:
+        raise HTTPException(400, "New key is empty after sanitization")
+    try:
+        ph = session_store.rename_placeholder(session_id, key, clean)
+    except FileNotFoundError:
+        raise HTTPException(404, "Session not found")
+    except KeyError:
+        raise HTTPException(404, f"Placeholder '{key}' not found")
+    except ValueError as exc:
+        raise HTTPException(409, str(exc))
     return PlaceholderResponse(
         key=ph["key"],
         type=ph["type"],

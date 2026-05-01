@@ -97,6 +97,21 @@ def add_placeholder(
     return placeholder
 
 
+def rename_placeholder(session_id: str, old_key: str, new_key: str) -> dict:
+    data = _load(session_id)
+    phs = data["placeholders"]
+    if old_key not in phs:
+        raise KeyError(old_key)
+    if new_key in phs:
+        raise ValueError(f"Key '{new_key}' already exists")
+    ph = phs.pop(old_key)
+    ph["key"] = new_key
+    phs[new_key] = ph
+    data["template_generated"] = False
+    _save(session_id, data)
+    return ph
+
+
 def update_placeholder_type(session_id: str, key: str, new_type: str) -> dict:
     data = _load(session_id)
     ph = data["placeholders"].get(key)

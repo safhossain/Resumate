@@ -1,7 +1,59 @@
 <script setup lang="ts">
-import { useSessionStore } from '../stores/session'
+import { ref } from 'vue'
+import { useSessionStore, sanitizeKey } from '../stores/session'
 
 const session = useSessionStore()
+
+/* ── per-row rename state ─────────────────────────────────────────── */
+const editingKey = ref<string | null>(null)
+const editValue  = ref('')
+const editError  = ref('')
+
+function startRename(key: string) {
+  editingKey.value = key
+  editValue.value  = key
+  editError.value  = ''
+}
+
+function onEditInput(raw: string) {
+  editValue.value = raw
+  const clean = sanitizeKey(raw)
+  if (!clean) {
+    editError.value = 'Key cannot be empty.'
+  } else if (
+    clean !== editingKey.value &&
+    Object.keys(session.placeholders).includes(clean)
+  ) {
+    editError.value = `'${clean}' already exists.`
+  } else {
+    editError.value = ''
+  }
+}
+
+async function commitRename() {
+  if (!editingKey.value) return
+  const clean = sanitizeKey(editValue.value)
+  if (!clean || editError.value) return
+  if (clean === editingKey.value) { cancelRename(); return }
+  try {
+    await session.renamePlaceholder(editingKey.value, clean)
+  } catch (e: unknown) {
+    editError.value = e instanceof Error ? e.message : String(e)
+    return
+  }
+  cancelRename()
+}
+
+function cancelRename() {
+  editingKey.value = null
+  editValue.value  = ''
+  editError.value  = ''
+}
+
+function onKeydown(e: KeyboardEvent) {
+  if (e.key === 'Enter')  commitRename()
+  if (e.key === 'Escape') cancelRename()
+}
 </script>
 
 <template>
@@ -28,13 +80,33 @@ const session = useSessionStore()
         </button>
 
         <div class="flex-1 min-w-0">
-          <!-- key -->
-          <span
-            class="font-mono text-xs"
+          <!-- key: normal display or inline rename field -->
+          <div v-if="editingKey === ph.key" class="mb-0.5">
+            <input
+              :value="editValue"
+              autofocus
+              class="w-full font-mono text-xs bg-gray-900 border rounded px-1.5 py-0.5 focus:outline-none focus:ring-1"
+              :class="editError
+                ? 'border-red-500 text-red-300 focus:ring-red-500'
+                : 'border-gray-600 text-gray-200 focus:ring-blue-500'"
+              @input="onEditInput(($event.target as HTMLInputElement).value)"
+              @keydown="onKeydown"
+              @blur="commitRename"
+            />
+            <p v-if="editError" class="text-[10px] text-red-400 mt-0.5">{{ editError }}</p>
+            <p v-else-if="editValue !== sanitizeKey(editValue)" class="text-[10px] text-gray-500 mt-0.5">
+              Will save as: <span class="text-gray-300 font-mono">{{ sanitizeKey(editValue) }}</span>
+            </p>
+          </div>
+          <button
+            v-else
+            class="font-mono text-xs text-left w-full truncate hover:underline decoration-dotted"
             :class="ph.type === 'tailor' ? 'text-blue-400' : 'text-amber-400'"
+            title="Click to rename"
+            @click="startRename(ph.key)"
           >
             {{ ph.key }}
-          </span>
+          </button>
 
           <!-- selected text preview -->
           <p class="text-[11px] text-gray-500 truncate mt-0.5">{{ ph.selected_text }}</p>

@@ -10,11 +10,18 @@ import {
   addPlaceholder as apiAddPh,
   removePlaceholder as apiRemovePh,
   updatePlaceholderType as apiUpdatePhType,
+  renamePlaceholder as apiRenamePh,
   listSessions as apiListSessions,
   getSession as apiGetSession,
   deleteSession as apiDeleteSession,
   deleteAllSessions as apiDeleteAllSessions,
 } from '../api/client'
+
+export function sanitizeKey(raw: string): string {
+  let s = raw.toLowerCase().replace(/-/g, '_').replace(/\s+/g, '_')
+  s = s.replace(/[^a-z0-9_]/g, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '')
+  return s || 'field'
+}
 
 export const useSessionStore = defineStore('session', () => {
   const sessionId = ref<string | null>(null)
@@ -94,6 +101,15 @@ export const useSessionStore = defineStore('session', () => {
     placeholders.value = copy
   }
 
+  async function renamePlaceholder(oldKey: string, newKey: string) {
+    if (!sessionId.value || !placeholders.value[oldKey]) return
+    const updated = await apiRenamePh(sessionId.value, oldKey, newKey)
+    const copy = { ...placeholders.value }
+    delete copy[oldKey]
+    copy[updated.key] = updated
+    placeholders.value = copy
+  }
+
   async function togglePlaceholderType(key: string) {
     if (!sessionId.value || !placeholders.value[key]) return
     const current = placeholders.value[key].type
@@ -157,6 +173,7 @@ export const useSessionStore = defineStore('session', () => {
     upload,
     addPlaceholder,
     removePlaceholder,
+    renamePlaceholder,
     togglePlaceholderType,
     updatePlaceholderValue,
     loadSessions,
