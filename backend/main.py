@@ -114,6 +114,10 @@ def main(
     pages: int | None = None,
     auto_retry: bool = False,
 ) -> None:
+    
+    if "ollama" in model:
+        MODELS[model] = {"provider": "ollama", "model_id": model.replace("ollama", "").replace("/","").strip()}
+        
     with open(PLACEHOLDERS_PATH, encoding="utf-8") as f:
         fields = json.load(f)
 
@@ -199,7 +203,6 @@ def main(
             # Page-target + baseline char budgets apply only to docx/tex (--pages pipeline).
             # TXT uses the same CALL path but should not get PAGE TARGET or baseline metrics in the system prompt.
             page_hint_for_llm = pages if Handler in (DOCXf, J2f) else None
-
             llm_response: LLM_O = CALL(
                 payload, model=model, page_hint=page_hint_for_llm,
                 baseline_fields=baseline_fields,
@@ -497,6 +500,8 @@ Examples:
         epilog=(
             "Model keys (--model):\n"
             + "\n".join(f"  {k}" for k in MODELS)
+            + "\nLocal Models supported via Ollama(ollama/model_name)\n"
+            + "Example:\n  ollama/qwen2.5:14b"
             + "\n\n"
             "Note: -n/--no only accepts -f/--format and -p/--posting.\n"
             "      --model, --output, --moddeg, --faux, --pages, and -y require an LLM call.\n"
@@ -537,7 +542,7 @@ Examples:
     parser.add_argument(
         "-m", "--model",
         dest="model",
-        choices=list(MODELS),
+        # choices=list(MODELS),
         default=DEFAULT_MODEL,
         metavar="MODEL",
         help=(
