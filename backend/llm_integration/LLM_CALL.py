@@ -4,6 +4,7 @@ All provider calls are delegated to the AI_API library.
 
 from .AI_API.api_scripts.contracts import LLM_I, LLM_O, get_mod_deg_str, get_LLM_I_str, get_LLM_O_str
 from .AI_API.api_scripts.api_gateway import ask_json, ask, MODELS
+from backend.loading_spinner import with_loading
 
 if len(MODELS) > 0:
     DEFAULT_MODEL: str = list(MODELS)[0]    
@@ -39,10 +40,10 @@ GOAL
     provided Additional Candidate Context (ACC) as supplementary truth.
 
 INPUT
-{get_LLM_I_str}
+{get_LLM_I_str()}
 
 OUTPUT
-{get_LLM_O_str}
+{get_LLM_O_str()}
 
     - "placeholders": return every key from the input "placeholders" object, with updated values.
     - "changes_made": a numbered list, one entry per placeholder key, in the format:
@@ -54,7 +55,7 @@ OUTPUT
 ------------------------------------------------------------
 MODIFICATION DEGREE (mod_deg)
 ------------------------------------------------------------
-{get_mod_deg_str}
+{get_mod_deg_str()}
 
 ------------------------------------------------------------
 FAUX MODE (faux)
@@ -387,7 +388,7 @@ def _format_baseline_metrics(original_fields: dict | None) -> str:
         placeholder_count=len(original_fields),
     )
 
-
+@with_loading("Calling LLM")
 def CALL(
     payload: LLM_I,
     model: str | None = None,
@@ -412,7 +413,7 @@ def CALL(
         system = system + _format_baseline_metrics(baseline_fields)
     return ask_json(selected, str(payload), schema, system=system)
 
-
+@with_loading("Calling LLM Retry 1")
 def CALL_RETRY(
     payload: LLM_I,
     actual_pages: int,
@@ -443,7 +444,7 @@ def CALL_RETRY(
     )
     return ask_json(selected, str(payload), schema, system=retry_system)
 
-
+@with_loading("Calling LLM Retry 2")
 def CALL_RETRY2(
     payload: LLM_I,
     actual_pages: int,
@@ -562,7 +563,7 @@ SECOND RETRY — MBP TARGETED REPHRASING, LaTeX  (mod_deg={mod_deg}, faux={faux}
 # ---------------------------------------------------------------------------
 # Public call interface — LaTeX
 # ---------------------------------------------------------------------------
-
+@with_loading("Calling LLM Retry 1")
 def CALL_RETRY_TEX(
     payload: LLM_I,
     actual_pages: int,
@@ -591,7 +592,7 @@ def CALL_RETRY_TEX(
     )
     return ask_json(selected, str(payload), schema, system=retry_system)
 
-
+@with_loading("Calling LLM Retry 2")
 def CALL_RETRY2_TEX(
     payload: LLM_I,
     actual_pages: int,
@@ -623,7 +624,7 @@ def CALL_RETRY2_TEX(
 # ---------------------------------------------------------------------------
 # Debug / raw
 # ---------------------------------------------------------------------------
-
+@with_loading("Calling LLM RAW")
 def CALL_RAW(payload: LLM_I, model: str | None = None) -> str:
     #Call the LLM in plain-text mode.  Returns the raw response string (debug)
     selected = model or DEFAULT_MODEL

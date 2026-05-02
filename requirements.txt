@@ -13,3 +13,4 @@ python-multipart
 mammoth
 beautifulsoup4
 yake
+ollama

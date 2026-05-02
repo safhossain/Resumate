@@ -162,10 +162,40 @@ def _deepseek_ask_json(model_id: str, prompt: str, schema: dict, system: Optiona
         f"DeepSeek returned invalid JSON after 3 attempts. Last response: {last_content!r}"
     )
 
+## Local LLM
+def _ollama_llm_ask(model_id: str, prompt: str, system: Optional[str]) -> str:
+    from ollama import chat
+
+    messages = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": prompt})
+
+    response = chat(model=model_id, messages=messages)
+    return response["message"]["content"] or ""
+
+
+def _ollama_llm_ask_json(model_id: str, prompt: str, schema: dict, system: Optional[str]) -> LLM_O:
+    from ollama import chat
+    messages = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": prompt})
+
+    response = chat(model=model_id, messages=messages, format=schema)
+    return json.loads(response["message"]["content"] or "")
+
+
 
 # Routing helpers
 def _resolve(model: str) -> tuple[str, str]:
-    """Return (provider, model_id) for a model key, or raise ValueError."""
+    """
+    Local Models are only supported using Ollama
+    Return (provider, model_id) for a model key, or raise ValueError.
+    """
+    if "ollama" in model:
+        return "ollama", model.replace("ollama","").replace("/", "").strip()
+
     if model not in MODELS:
         raise ValueError(f"Unknown model {model!r}. Available models: {list(MODELS)}")
     entry = MODELS[model]
@@ -200,6 +230,8 @@ def ask(model: str, prompt: str, system: Optional[str] = None) -> str:
         return _deepseek_ask(model_id, prompt, system)
     if provider == "xai":
         return _openai_ask(model_id, os.environ["XAI_API_KEY"], "https://api.x.ai/v1", prompt, system)
+    if provider == "ollama":
+        return _ollama_llm_ask(model_id, prompt, system)
 
     raise ValueError(f"Unhandled provider: {provider!r}")
 
@@ -232,6 +264,8 @@ def ask_json(model: str, prompt: str, schema: dict, system: Optional[str] = None
         return _deepseek_ask_json(model_id, prompt, schema, system)
     if provider == "xai":
         return _openai_ask_json(model_id, os.environ["XAI_API_KEY"], "https://api.x.ai/v1", prompt, schema, system)
+    if provider == "ollama":
+        return _ollama_llm_ask_json(model_id, prompt, schema, system)
 
     raise ValueError(f"Unhandled provider: {provider!r}")
 
