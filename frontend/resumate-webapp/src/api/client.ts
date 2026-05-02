@@ -63,6 +63,14 @@ export interface PageInfo {
   within_target: boolean
 }
 
+export interface ChangeLogEntry {
+  stage: 'initial' | 'auto_retry' | 'manual_retry'
+  label: string
+  text: string
+  page_count: number | null
+  target_pages: number | null
+}
+
 export interface TailorResponse {
   output_id: string
   preview_html: string
@@ -71,6 +79,7 @@ export interface TailorResponse {
   can_retry: boolean
   retry_number: number
   changes_made: string | null
+  changes_log: ChangeLogEntry[]
 }
 
 export interface SessionSummary {

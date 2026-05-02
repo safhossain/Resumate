@@ -66,6 +66,15 @@ class PageInfoResponse(BaseModel):
     within_target: bool
 
 
+class ChangeLogEntry(BaseModel):
+    """A single LLM call's contribution to the running summary of changes."""
+    stage: str               # "initial" | "auto_retry" | "manual_retry"
+    label: str               # human-friendly stage description
+    text: str                # raw changes_made string from the LLM
+    page_count: Optional[int] = None
+    target_pages: Optional[int] = None
+
+
 class TailorResponse(BaseModel):
     output_id: str
     preview_html: str
@@ -73,7 +82,8 @@ class TailorResponse(BaseModel):
     page_info: Optional[PageInfoResponse] = None
     can_retry: bool = False
     retry_number: int = 0
-    changes_made: Optional[str] = None
+    changes_made: Optional[str] = None  # most recent stage text (legacy)
+    changes_log: list[ChangeLogEntry] = []
 
 
 class RetryRequest(BaseModel):

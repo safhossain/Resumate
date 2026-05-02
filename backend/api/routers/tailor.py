@@ -36,6 +36,7 @@ from backend.parsers_and_generators.page_info import get_pdf_page_info
 from backend.parsers_and_generators.visual_lines import analyze_mbps
 
 from ..models import (
+    ChangeLogEntry,
     GenerateTemplateRequest,
     GenerateTemplateResponse,
     ModelsResponse,
@@ -288,7 +289,15 @@ async def tailor(req: TailorRequest):
 
     llm_resp = CALL(payload, model=model, page_hint=page_hint, baseline_fields=baseline_fields)
     mod_fields = llm_resp["placeholders"]
-    changes_made: str = llm_resp.get("changes_made", "")
+    initial_changes: str = llm_resp.get("changes_made", "")
+    changes_log: list[ChangeLogEntry] = [
+        ChangeLogEntry(
+            stage="initial",
+            label="Initial tailoring",
+            text=initial_changes,
+        )
+    ]
+    changes_made: str = initial_changes
 
     run_ts = int(time.time())
     output_id = uuid.uuid4().hex[:8]
@@ -337,7 +346,8 @@ async def tailor(req: TailorRequest):
                     model=model,
                 )
                 mod_fields = retry_resp["placeholders"]
-                changes_made = retry_resp.get("changes_made", changes_made)
+                retry_changes = retry_resp.get("changes_made", "")
+                changes_made = retry_changes or changes_made
                 clean_ctx = _build_context(mod_fields, sensitive_fields)
 
                 handler2 = _handler_for(fmt, template_path, out_dir)
@@ -357,6 +367,19 @@ async def tailor(req: TailorRequest):
                     )
                     can_retry = not within2
 
+                changes_log.append(
+                    ChangeLogEntry(
+                        stage="auto_retry",
+                        label=(
+                            f"Page-fit retry "
+                            f"({pi['page_count']}p \u2192 target {req.pages}p)"
+                        ),
+                        text=retry_changes,
+                        page_count=pi2["page_count"] if pi2 else None,
+                        target_pages=req.pages,
+                    )
+                )
+
     preview_html = _generate_preview(output_path, fmt)
 
     output_info = {
@@ -372,6 +395,7 @@ async def tailor(req: TailorRequest):
         "pages": req.pages,
         "job_posting": req.job_posting,
         "acc": req.acc,
+        "changes_log": [e.model_dump() for e in changes_log],
     }
     session_store.add_output(req.session_id, output_info)
 
@@ -383,6 +407,7 @@ async def tailor(req: TailorRequest):
         can_retry=can_retry,
         retry_number=retry_number,
         changes_made=changes_made or None,
+        changes_log=changes_log,
     )
 
 
@@ -454,6 +479,10 @@ async def retry(req: RetryRequest):
     new_mod = llm_resp["placeholders"]
     changes_made_retry: str = llm_resp.get("changes_made", "")
     retry_number = prev_output["retry_number"] + 1
+
+    # Carry forward the prior log and append this manual retry entry
+    prev_log_raw = prev_output.get("changes_log") or []
+    changes_log: list[ChangeLogEntry] = [ChangeLogEntry(**e) for e in prev_log_raw]
     run_ts = int(time.time())
     output_id = uuid.uuid4().hex[:8]
     run_meta = {
@@ -482,6 +511,19 @@ async def retry(req: RetryRequest):
         )
         can_retry = not within
 
+    changes_log.append(
+        ChangeLogEntry(
+            stage="manual_retry",
+            label=(
+                f"Manual retry #{retry_number} "
+                f"({actual}p \u2192 target {pages}p)"
+            ),
+            text=changes_made_retry,
+            page_count=pi["page_count"] if pi else None,
+            target_pages=pages,
+        )
+    )
+
     preview_html = _generate_preview(output_path, fmt)
 
     output_info = {
@@ -497,6 +539,7 @@ async def retry(req: RetryRequest):
         "pages": pages,
         "job_posting": job_posting,
         "acc": acc,
+        "changes_log": [e.model_dump() for e in changes_log],
     }
     session_store.add_output(req.session_id, output_info)
 
@@ -508,6 +551,7 @@ async def retry(req: RetryRequest):
         can_retry=can_retry,
         retry_number=retry_number,
         changes_made=changes_made_retry or None,
+        changes_log=changes_log,
     )
 
 

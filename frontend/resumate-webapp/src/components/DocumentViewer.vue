@@ -402,6 +402,7 @@ const overlappingKey = computed(() => {
             <li><span class="text-blue-400">Highlight</span> text to mark as a <b class="text-blue-400">tailor</b> (LLM rewrites) or <b class="text-amber-400">sensitive</b> (local-only) placeholder.</li>
             <li>Paste the <b class="text-gray-300">job posting</b> in the left panel.</li>
             <li>Pick model &amp; settings in the top bar.</li>
+            <li><b class="text-gray-400">Faux</b> (top bar): when on, the LLM may add plausible skills or experience that fit your profile and the job; when off, it only rewrites using facts already in your resume and ACC.</li>
             <li>Hit <b class="text-gray-300">Tailor Resume</b>.</li>
           </ol>
           <p
