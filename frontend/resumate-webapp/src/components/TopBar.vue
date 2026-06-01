@@ -1,7 +1,10 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import { usePipelineStore } from '../stores/pipeline'
+import { useSessionStore } from '../stores/session'
 
 const pipeline = usePipelineStore()
+const session = useSessionStore()
 
 const moddegOptions = [
   { value: 'low', label: 'Low' },
@@ -10,6 +13,20 @@ const moddegOptions = [
   { value: 'medium-high', label: 'Med-High' },
   { value: 'high', label: 'High' },
 ]
+
+const canTailor = computed(
+  () => session.hasSession && session.placeholderList.length > 0 && pipeline.jobPosting.trim().length > 0,
+)
+
+const disabledReason = computed(() => {
+  if (pipeline.isTailoring) return 'Tailoring in progress…'
+  const missing: string[] = []
+  if (!session.hasSession) missing.push('upload a resume')
+  if (!session.placeholderList.length) missing.push('add at least one placeholder')
+  if (!pipeline.jobPosting.trim()) missing.push('paste a job posting')
+  if (!missing.length) return ''
+  return 'To tailor: ' + missing.join(', and ') + '.'
+})
 </script>
 
 <template>
@@ -73,5 +90,25 @@ const moddegOptions = [
         }"
       />
     </label>
+
+    <!-- spacer -->
+    <div class="flex-1" />
+
+    <!-- tailor button -->
+    <button
+      :disabled="!canTailor || pipeline.isTailoring"
+      :title="disabledReason || 'Tailor Resume'"
+      class="flex items-center gap-2 px-4 py-1.5 rounded-lg font-semibold text-sm transition-colors flex-shrink-0"
+      :class="canTailor && !pipeline.isTailoring
+        ? 'bg-blue-600 hover:bg-blue-500 text-white cursor-pointer'
+        : 'bg-gray-800 text-gray-500 cursor-not-allowed'"
+      @click="pipeline.tailor()"
+    >
+      <svg v-if="pipeline.isTailoring" class="animate-spin h-3.5 w-3.5" viewBox="0 0 24 24" fill="none">
+        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
+        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+      </svg>
+      <span>{{ pipeline.isTailoring ? 'Tailoring…' : 'Tailor Resume' }}</span>
+    </button>
   </header>
 </template>

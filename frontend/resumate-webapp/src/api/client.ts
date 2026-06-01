@@ -44,6 +44,7 @@ export interface PlaceholderResponse {
   start_offset: number
   end_offset: number
   value: string | null
+  warning: string | null
 }
 
 export interface TailorRequest {
@@ -71,6 +72,13 @@ export interface ChangeLogEntry {
   target_pages: number | null
 }
 
+export interface StageDownload {
+  stage: 'initial' | 'auto_retry' | 'manual_retry'
+  label: string
+  pdf_url: string | null
+  tex_url: string | null
+}
+
 export interface TailorResponse {
   output_id: string
   preview_html: string
@@ -80,6 +88,8 @@ export interface TailorResponse {
   retry_number: number
   changes_made: string | null
   changes_log: ChangeLogEntry[]
+  render_error: string | null
+  stage_downloads: StageDownload[]
 }
 
 export interface SessionSummary {

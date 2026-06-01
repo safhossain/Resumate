@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onUnmounted } from 'vue'
 import { usePipelineStore } from '../stores/pipeline'
-import type { ChangeLogEntry } from '../api/client'
+import type { ChangeLogEntry, StageDownload } from '../api/client'
 
 const pipeline = usePipelineStore()
 const activeTab = ref<'output' | 'changes'>('output')
@@ -67,6 +67,16 @@ function stageBadgeClass(stage: ChangeLogEntry['stage']): string {
   if (stage === 'auto_retry') return 'bg-amber-900/40 text-amber-300 border-amber-800/60'
   return 'bg-purple-900/40 text-purple-300 border-purple-800/60'
 }
+
+function downloadBadgeClass(stage: StageDownload['stage']): string {
+  if (stage === 'initial') return 'text-blue-400 border-blue-800/50'
+  if (stage === 'auto_retry') return 'text-amber-400 border-amber-800/50'
+  return 'text-purple-400 border-purple-800/50'
+}
+
+const stageDownloads = computed<StageDownload[]>(
+  () => pipeline.latestOutput?.stage_downloads ?? [],
+)
 </script>
 
 <template>
@@ -113,6 +123,15 @@ function stageBadgeClass(stage: ChangeLogEntry['stage']): string {
           </button>
         </div>
 
+        <!-- render error badge -->
+        <span
+          v-if="pipeline.latestOutput.render_error"
+          class="text-xs px-2 py-0.5 rounded-full bg-red-900/40 text-red-400"
+          :title="pipeline.latestOutput.render_error"
+        >
+          Render failed
+        </span>
+
         <!-- page info badge -->
         <span
           v-if="pipeline.latestOutput.page_info"
@@ -135,7 +154,7 @@ function stageBadgeClass(stage: ChangeLogEntry['stage']): string {
         </span>
       </div>
 
-      <div class="flex items-center gap-2">
+      <div class="flex items-center gap-2 flex-wrap">
         <!-- retry -->
         <button
           v-if="pipeline.latestOutput.can_retry"
@@ -147,8 +166,35 @@ function stageBadgeClass(stage: ChangeLogEntry['stage']): string {
           <span v-else>Retry (page limit)</span>
         </button>
 
-        <!-- download -->
+        <!-- per-stage downloads -->
+        <template v-if="stageDownloads.length">
+          <div
+            v-for="sd in stageDownloads"
+            :key="sd.stage"
+            class="flex items-center gap-1 border rounded px-1.5 py-0.5"
+            :class="downloadBadgeClass(sd.stage)"
+          >
+            <span class="text-[10px] font-semibold uppercase tracking-wide select-none mr-0.5">{{ sd.label }}</span>
+            <a
+              v-if="sd.pdf_url"
+              :href="sd.pdf_url"
+              download
+              class="text-[11px] font-medium px-1.5 py-0.5 rounded hover:bg-white/10 transition-colors"
+              title="Download PDF"
+            >.pdf</a>
+            <a
+              v-if="sd.tex_url"
+              :href="sd.tex_url"
+              download
+              class="text-[11px] font-medium px-1.5 py-0.5 rounded hover:bg-white/10 transition-colors"
+              title="Download LaTeX source"
+            >.tex</a>
+          </div>
+        </template>
+
+        <!-- fallback download (older outputs without stage_downloads) -->
         <a
+          v-else
           :href="pipeline.latestOutput.download_url"
           download
           class="px-3 py-1 rounded text-xs font-medium bg-blue-600/20 text-blue-400 hover:bg-blue-600/40 transition-colors"

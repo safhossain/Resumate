@@ -32,11 +32,11 @@ const quickLabelDuplicate = computed(() => {
   return sanitizeKey(raw) in session.placeholders
 })
 
-/* ── ephemeral toast for placeholder errors ─────────────────────── */
-const toast = ref<string | null>(null)
+/* ── ephemeral toasts ────────────────────────────────────────────── */
+const toast = ref<{ text: string; kind: 'error' | 'warning' } | null>(null)
 let toastTimer: ReturnType<typeof setTimeout> | null = null
-function showToast(message: string, ms = 5500) {
-  toast.value = message
+function showToast(message: string, kind: 'error' | 'warning' = 'error', ms = 5500) {
+  toast.value = { text: message, kind }
   if (toastTimer) clearTimeout(toastTimer)
   toastTimer = setTimeout(() => { toast.value = null }, ms)
 }
@@ -250,7 +250,7 @@ async function confirmQuickLabel() {
 async function doCreatePlaceholder(type: 'tailor' | 'sensitive', customKey?: string) {
   if (!popover.value) return
   try {
-    await session.addPlaceholder(
+    const result = await session.addPlaceholder(
       popover.value.text,
       popover.value.startOffset,
       popover.value.endOffset,
@@ -258,6 +258,9 @@ async function doCreatePlaceholder(type: 'tailor' | 'sensitive', customKey?: str
       customKey,
     )
     closePopover()
+    if (result?.warning) {
+      showToast(result.warning, 'warning', 8000)
+    }
   } catch (e) {
     console.error('Failed to add placeholder:', e)
     const raw = e instanceof Error ? e.message : String(e)
@@ -265,7 +268,7 @@ async function doCreatePlaceholder(type: 'tailor' | 'sensitive', customKey?: str
       /400/.test(raw)
         ? "This selection couldn't be mapped back to the document — likely a tab, soft line break, or other formatting edge case we don't yet support. Try selecting a slightly different region. (We're working on covering more cases.)"
         : `Couldn't add placeholder: ${raw}`
-    showToast(friendly)
+    showToast(friendly, 'error')
     closePopover()
   }
 }
@@ -374,19 +377,7 @@ const overlappingKey = computed(() => {
       Upload a document to get started
     </div>
 
-    <!-- tex: source + PDF side-by-side -->
-    <div v-else-if="session.fileFormat === 'tex' && session.texPdfUrl" class="flex flex-col h-full">
-      <div class="flex-1 min-h-0 flex">
-        <div
-          ref="contentEl"
-          class="w-1/2 overflow-auto p-4 pb-16 border-r border-gray-800 cursor-text"
-          v-html="session.renderedHtml"
-        />
-        <iframe :src="session.texPdfUrl" class="w-1/2 bg-white" />
-      </div>
-    </div>
-
-    <!-- docx / txt / tex-source-only -->
+    <!-- docx / txt / tex -->
     <div v-else class="flex">
       <div
         ref="contentEl"
@@ -455,23 +446,44 @@ const overlappingKey = computed(() => {
             >i</span>
             <span><b class="text-gray-400">Quick label</b> (top bar toggle, on by default) lets you type a custom name right after marking a selection. Press <b class="text-gray-400">Enter</b> to confirm, or click away to fall back to the auto-generated name. Turn it off to skip the naming step entirely.</span>
           </p>
+          <p
+            v-if="session.fileFormat === 'tex'"
+            class="mt-2.5 pt-2 border-t border-amber-900/40 flex gap-2 text-[10px] text-amber-700/80 leading-relaxed"
+            role="note"
+          >
+            <span
+              class="flex-shrink-0 w-4 h-4 rounded-full border border-amber-700/60 text-amber-500 flex items-center justify-center text-[9px] font-semibold font-sans"
+              aria-label="LaTeX caution"
+            >!</span>
+            <span><b class="text-amber-500">.tex files:</b> avoid selecting text that starts or ends mid-brace (e.g. selecting only part of <b class="text-amber-400/80">\textbf{word}</b>). Imbalanced <b class="text-amber-400/80">{ }</b> in a placeholder value can break LaTeX compilation. An amber warning appears if a selection looks risky.</span>
+          </p>
         </div>
       </div>
     </div>
 
-    <!-- transient error toast -->
+    <!-- transient toast (error = red, warning = amber) -->
     <div
       v-if="toast"
-      class="absolute top-3 right-3 z-50 max-w-sm rounded-lg border border-red-800/60 bg-red-950/90 backdrop-blur px-3 py-2 shadow-lg flex items-start gap-2"
+      class="absolute top-3 right-3 z-50 max-w-sm rounded-lg backdrop-blur px-3 py-2 shadow-lg flex items-start gap-2"
+      :class="toast.kind === 'warning'
+        ? 'border border-amber-700/60 bg-amber-950/90'
+        : 'border border-red-800/60 bg-red-950/90'"
       role="alert"
     >
       <span
-        class="flex-shrink-0 w-4 h-4 rounded-full border border-red-400/60 text-red-300 flex items-center justify-center text-[9px] font-semibold font-sans mt-0.5"
+        class="flex-shrink-0 w-4 h-4 rounded-full border flex items-center justify-center text-[9px] font-semibold font-sans mt-0.5"
+        :class="toast.kind === 'warning'
+          ? 'border-amber-500/60 text-amber-300'
+          : 'border-red-400/60 text-red-300'"
         aria-hidden="true"
       >!</span>
-      <p class="text-[11px] text-red-200 leading-relaxed flex-1">{{ toast }}</p>
+      <p
+        class="text-[11px] leading-relaxed flex-1"
+        :class="toast.kind === 'warning' ? 'text-amber-200' : 'text-red-200'"
+      >{{ toast.text }}</p>
       <button
-        class="text-red-400 hover:text-red-200 text-xs flex-shrink-0 leading-none"
+        class="text-xs flex-shrink-0 leading-none"
+        :class="toast.kind === 'warning' ? 'text-amber-400 hover:text-amber-200' : 'text-red-400 hover:text-red-200'"
         title="Dismiss"
         @click="toast = null"
       >✕</button>

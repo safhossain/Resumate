@@ -67,12 +67,48 @@ function onKeydown(e: KeyboardEvent) {
   if (e.key === 'Enter')  commitRename()
   if (e.key === 'Escape') cancelRename()
 }
+
+/* ── placeholder download ────────────────────────────────────────── */
+function downloadJson(obj: Record<string, string>, filename: string) {
+  const blob = new Blob([JSON.stringify(obj, null, 2)], { type: 'application/json' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+function downloadPlaceholders() {
+  const fields: Record<string, string> = {}
+  const sensitiveFields: Record<string, string> = {}
+  for (const ph of session.placeholderList) {
+    if (ph.type === 'tailor') {
+      fields[ph.key] = ph.selected_text
+    } else {
+      sensitiveFields[ph.key] = ph.value ?? ph.selected_text
+    }
+  }
+  if (Object.keys(fields).length) downloadJson(fields, 'fields.json')
+  if (Object.keys(sensitiveFields).length) downloadJson(sensitiveFields, 'sensitive_fields.json')
+}
 </script>
 
 <template>
   <div class="p-4 border-b border-gray-800" v-if="session.placeholderList.length">
     <div class="flex items-center justify-between mb-2">
-      <p class="text-xs text-gray-500 uppercase tracking-wider">Placeholders</p>
+      <div class="flex items-center gap-1.5">
+        <p class="text-xs text-gray-500 uppercase tracking-wider">Placeholders</p>
+        <button
+          class="flex items-center justify-center w-5 h-5 rounded text-gray-600 hover:text-blue-400 hover:bg-gray-700/50 transition-colors"
+          title="Download fields.json and sensitive_fields.json"
+          @click="downloadPlaceholders"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" class="w-3.5 h-3.5">
+            <path d="M8 1a.75.75 0 0 1 .75.75v6.19l1.97-1.97a.75.75 0 1 1 1.06 1.06l-3.25 3.25a.75.75 0 0 1-1.06 0L4.22 7.03a.75.75 0 1 1 1.06-1.06L7.25 7.94V1.75A.75.75 0 0 1 8 1ZM2.75 13a.75.75 0 0 0 0 1.5h10.5a.75.75 0 0 0 0-1.5H2.75Z"/>
+          </svg>
+        </button>
+      </div>
       <label
         class="flex items-center gap-1.5 text-[10px] text-gray-600 cursor-pointer select-none"
         title="Scroll to the newest placeholder when one is added"

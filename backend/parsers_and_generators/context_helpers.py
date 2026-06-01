@@ -5,6 +5,11 @@ import re
 NOTE: Everything in this file is LLM-generated becuase I don't know regex or escape keys
 '''
 
+# Matches any LaTeX control sequence: backslash followed by one or more letters.
+# Presence of this in a value means the value is already LaTeX source and
+# must not be run through escape_latex (escaping would mangle \href, \textbf, etc.)
+_LATEX_CTRL_RE = re.compile(r'\\[a-zA-Z]')
+
 def resolve_placeholders(ctx: Dict[str, Optional[str]], max_passes=5):
     # Note: LLM-generated
     """
@@ -51,8 +56,12 @@ def escape_latex(ctx: Any,
     Recursively walk ctx (which might be a dict, list, tuple or scalar).
     Any str gets latex-escaped; others are kept unchanged.
     """
-    # 1) If this is a string, do a single-pass escape
+    # 1) If this is a string, do a single-pass escape —
+    #    but skip values that already contain LaTeX control sequences (e.g. \href,
+    #    \textbf), because those values ARE LaTeX source and must not be mangled.
     if isinstance(ctx, str):
+        if _LATEX_CTRL_RE.search(ctx):
+            return ctx
         return _LATEX_ESC_RE.sub(lambda m: _LATEX_ESC[m.group(1)], ctx)
 
     # 2) If it's a dict, recurse on each value

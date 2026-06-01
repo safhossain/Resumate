@@ -93,6 +93,17 @@ def _ranges_overlap(a_start: int, a_end: int, b_start: int, b_end: int) -> bool:
     return a_start < b_end and b_start < a_end
 
 
+def _brace_balance(text: str) -> int:
+    """Return net brace depth of *text* (positive = unclosed '{', negative = extra '}')."""
+    depth = 0
+    for ch in text:
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+    return depth
+
+
 @router.post("/placeholder", response_model=PlaceholderResponse)
 async def add_placeholder(body: PlaceholderCreate):
     try:
@@ -114,6 +125,23 @@ async def add_placeholder(body: PlaceholderCreate):
             f"Selected text mismatch: expected {body.selected_text!r}, "
             f"found {actual_text!r} at offsets [{body.start_offset}:{body.end_offset}]",
         )
+
+    # For .tex files, flag selections with unbalanced curly braces.
+    # This is non-blocking (placeholder is still created) but a warning is returned
+    # so the frontend can show an amber advisory to the user.
+    tex_warning: str | None = None
+    if session.get("file_format") == "tex":
+        balance = _brace_balance(actual_text)
+        if balance > 0:
+            tex_warning = (
+                f"Selection has {balance} unclosed '{{' — this may cause LaTeX rendering errors. "
+                "Consider adjusting your selection to exclude the opening brace(s)."
+            )
+        elif balance < 0:
+            tex_warning = (
+                f"Selection has {-balance} extra '}}' — this may cause LaTeX rendering errors. "
+                "Consider adjusting your selection to exclude the trailing brace(s)."
+            )
 
     # Check for overlapping placeholders
     for existing_ph in session["placeholders"].values():
@@ -156,6 +184,7 @@ async def add_placeholder(body: PlaceholderCreate):
         start_offset=ph["start_offset"],
         end_offset=ph["end_offset"],
         value=ph.get("value"),
+        warning=tex_warning,
     )
 
 

@@ -14,6 +14,31 @@ _SENTINEL_RE = re.compile(
 )
 
 
+def _brace_balance_errors(tex_source: str) -> list[str]:
+    """Return human-readable messages for every brace imbalance found in *tex_source*.
+
+    Scans line-by-line. An unmatched '}' is reported immediately; unclosed '{'
+    groups are reported at end-of-file. Returns an empty list when braces balance.
+    Comments (% to end-of-line) are skipped so they don't count.
+    """
+    errors: list[str] = []
+    depth = 0
+    for lineno, line in enumerate(tex_source.splitlines(), 1):
+        # Strip LaTeX comments (% not preceded by \)
+        stripped = re.sub(r'(?<!\\)%.*', '', line)
+        for col, ch in enumerate(stripped, 1):
+            if ch == '{':
+                depth += 1
+            elif ch == '}':
+                depth -= 1
+                if depth < 0:
+                    errors.append(f"Line {lineno}, col {col}: extra '}}' (no matching '{{')")
+                    depth = 0  # reset and keep scanning for further issues
+    if depth > 0:
+        errors.append(f"End of file: {depth} unclosed '{{' group(s) remaining")
+    return errors
+
+
 def _remove_sentinel_lines(tex_path: Path) -> int:
     """Remove \\resumeItem{REMOVE_BULLETPOINT} lines from the rendered .tex source."""
     content = tex_path.read_text(encoding="utf-8")
@@ -47,6 +72,19 @@ class J2f(FileType):
         removed = _remove_sentinel_lines(working_copy)
         if removed:
             print(f"  LaTeX: removed {removed} REMOVE_BULLETPOINT sentinel(s) from .tex source")
+
+        # Pre-flight brace check — surface a clear error before pdflatex sees it.
+        tex_source = working_copy.read_text(encoding="utf-8")
+        brace_errors = _brace_balance_errors(tex_source)
+        if brace_errors:
+            summary = "; ".join(brace_errors[:3])
+            if len(brace_errors) > 3:
+                summary += f" (and {len(brace_errors) - 3} more)"
+            raise RuntimeError(
+                f"Rendered .tex has unbalanced braces — pdflatex will fail. "
+                f"This is usually caused by a placeholder value that contains an extra '{{' or '}}'. "
+                f"Details: {summary}"
+            )
 
         pdf_path = gen_pdf(working_copy)
         return pdf_path

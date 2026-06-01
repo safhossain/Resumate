@@ -1,24 +1,7 @@
 <script setup lang="ts">
-import { computed } from 'vue'
 import { usePipelineStore } from '../stores/pipeline'
-import { useSessionStore } from '../stores/session'
 
 const pipeline = usePipelineStore()
-const session = useSessionStore()
-
-const canTailor = computed(
-  () => session.hasSession && session.placeholderList.length > 0 && pipeline.jobPosting.trim().length > 0,
-)
-
-const disabledReason = computed(() => {
-  if (pipeline.isTailoring) return 'Tailoring in progress…'
-  const missing: string[] = []
-  if (!session.hasSession) missing.push('upload a resume')
-  if (!session.placeholderList.length) missing.push('add at least one placeholder')
-  if (!pipeline.jobPosting.trim()) missing.push('paste a job posting')
-  if (!missing.length) return ''
-  return 'To tailor: ' + missing.join(', and ') + '.'
-})
 </script>
 
 <template>
@@ -28,7 +11,7 @@ const disabledReason = computed(() => {
     <textarea
       v-model="pipeline.jobPosting"
       placeholder="Paste job description here…"
-      class="flex-1 min-h-[120px] resize-none bg-gray-800/60 border border-gray-700 rounded-lg p-3 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-blue-500"
+      class="flex-1 min-h-[100px] max-h-[320px] resize-none bg-gray-800/60 border border-gray-700 rounded-lg p-3 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-blue-500"
     />
 
     <!-- ACC -->
@@ -36,31 +19,9 @@ const disabledReason = computed(() => {
     <textarea
       v-model="pipeline.acc"
       placeholder="Optional extra context for the LLM…"
-      rows="3"
-      class="resize-none bg-gray-800/60 border border-gray-700 rounded-lg p-3 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-blue-500"
+      class="min-h-[80px] max-h-[200px] flex-shrink-0 resize-none bg-gray-800/60 border border-gray-700 rounded-lg p-3 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-blue-500"
     />
 
-    <!-- tailor button -->
-    <button
-      :disabled="!canTailor || pipeline.isTailoring"
-      :title="disabledReason"
-      class="mt-4 w-full py-2.5 rounded-lg font-semibold text-sm transition-colors"
-      :class="canTailor && !pipeline.isTailoring
-        ? 'bg-blue-600 hover:bg-blue-500 text-white cursor-pointer'
-        : 'bg-gray-800 text-gray-500 cursor-not-allowed'"
-      @click="pipeline.tailor()"
-    >
-      <span v-if="pipeline.isTailoring" class="inline-flex items-center gap-2">
-        <svg class="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
-          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
-          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
-        </svg>
-        Tailoring…
-      </span>
-      <span v-else>Tailor Resume</span>
-    </button>
-
-    <p v-if="disabledReason && !pipeline.isTailoring" class="mt-2 text-xs text-gray-600 leading-relaxed">{{ disabledReason }}</p>
     <p v-if="pipeline.error" class="mt-2 text-xs text-red-400">{{ pipeline.error }}</p>
   </div>
 </template>

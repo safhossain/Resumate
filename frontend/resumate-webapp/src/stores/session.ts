@@ -91,6 +91,7 @@ export const useSessionStore = defineStore('session', () => {
       value,
     })
     placeholders.value = { ...placeholders.value, [ph.key]: ph }
+    return ph
   }
 
   async function removePlaceholder(key: string) {

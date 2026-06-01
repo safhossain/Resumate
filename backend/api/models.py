@@ -37,6 +37,7 @@ class PlaceholderResponse(BaseModel):
     start_offset: int
     end_offset: int
     value: Optional[str] = None
+    warning: Optional[str] = None  # non-blocking advisory (e.g. brace imbalance in .tex)
 
 
 class GenerateTemplateRequest(BaseModel):
@@ -75,15 +76,25 @@ class ChangeLogEntry(BaseModel):
     target_pages: Optional[int] = None
 
 
+class StageDownload(BaseModel):
+    """Download links for a single pipeline stage output."""
+    stage: str               # "initial" | "auto_retry" | "manual_retry"
+    label: str               # human-readable, e.g. "Stage 1 — Initial"
+    pdf_url: Optional[str] = None   # always set unless render failed
+    tex_url: Optional[str] = None   # set for .tex outputs only
+
+
 class TailorResponse(BaseModel):
     output_id: str
     preview_html: str
-    download_url: str
+    download_url: str  # kept for backwards-compat — points to final/latest output
     page_info: Optional[PageInfoResponse] = None
     can_retry: bool = False
     retry_number: int = 0
     changes_made: Optional[str] = None  # most recent stage text (legacy)
     changes_log: list[ChangeLogEntry] = []
+    render_error: Optional[str] = None
+    stage_downloads: list[StageDownload] = []  # per-stage download links
 
 
 class RetryRequest(BaseModel):

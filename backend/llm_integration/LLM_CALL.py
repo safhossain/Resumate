@@ -394,6 +394,7 @@ def CALL(
     model: str | None = None,
     page_hint: int | None = None,
     baseline_fields: dict | None = None,
+    file_format: str | None = None,
 ) -> LLM_O:
     """Call the LLM with forced JSON output. Returns a parsed LLM_O dict.
 
@@ -401,12 +402,15 @@ def CALL(
     and enables the REMOVE_BULLETPOINT sentinel for the initial call.
     baseline_fields: if set, appends per-placeholder char budgets from the
     pre-render to help the LLM stay within page bounds on the first try.
+    file_format: if "tex", appends LaTeX-specific rules to prevent brace corruption.
     """
     selected = model or DEFAULT_MODEL
     if selected not in MODELS:
         raise ValueError(f"Unknown model: {selected!r}. Available: {list(MODELS)}")
     schema = build_response_schema(payload["placeholders"])
     system = SYSTEM_PROMPT
+    if file_format == "tex":
+        system = system + _TEX_ADDENDUM
     if page_hint is not None:
         system = system + _PAGE_HINT_SECTION.format(pages=page_hint)
     if baseline_fields is not None:
@@ -480,6 +484,31 @@ def CALL_RETRY2(
 # ---------------------------------------------------------------------------
 # LaTeX-specific addendum and prompts
 # ---------------------------------------------------------------------------
+
+_TEX_ADDENDUM = """
+------------------------------------------------------------
+LaTeX SOURCE FILE  (this resume is in .tex format)
+------------------------------------------------------------
+    You are editing raw LaTeX source. Each placeholder value will be inserted VERBATIM
+    into a pre-built .tex template. The template already supplies all surrounding LaTeX
+    structure — commands, braces, environments.
+
+    CRITICAL RULES FOR .tex FILES:
+    - Return ONLY the inner text content that was originally inside the placeholder.
+      Do NOT add outer wrappers such as \\textbf{...}, \\emph{...}, \\href{...},
+      or any other LaTeX command that was not part of the original selected value.
+    - Do NOT add, duplicate, or rebalance curly braces. The template's surrounding
+      structure already provides the correct { } pairing. Adding an extra { or }
+      will break the LaTeX build.
+    - Do NOT end a value with }} or }{ — those are template-level structural characters.
+    - Special characters in plain-text values MUST be LaTeX-escaped:
+        % → \\%    $ → \\$    & → \\&    # → \\#    _ → \\_    ^ → \\^{}
+      Exception: if the original value already contained LaTeX commands (backslash
+      sequences like \\href or \\textbf), return the entire value as valid LaTeX
+      and do NOT add extra escaping on top of existing commands.
+    - Do not add \\vspace, \\setlength, \\newline, \\\\, or other layout commands
+      unless the original value already used them.
+"""
 
 _RETRY_PAGE_SECTION_TEX = """
 ------------------------------------------------------------
@@ -582,7 +611,7 @@ def CALL_RETRY_TEX(
     mod_deg_val = mod_deg.value if hasattr(mod_deg, "value") else str(mod_deg)
     mbp_block = _format_mbp_analysis(mbp_analysis)
 
-    retry_system = SYSTEM_PROMPT + _RETRY_PAGE_SECTION_TEX.format(
+    retry_system = SYSTEM_PROMPT + _TEX_ADDENDUM + _RETRY_PAGE_SECTION_TEX.format(
         actual_pages=actual_pages,
         target_pages=target_pages,
         mod_deg=mod_deg_val,
@@ -610,7 +639,7 @@ def CALL_RETRY2_TEX(
     mod_deg = payload.get("mod_deg")
     mod_deg_val = mod_deg.value if hasattr(mod_deg, "value") else str(mod_deg)
     mbp_block = _format_mbp_analysis(mbp_analysis)
-    second_retry_system = SYSTEM_PROMPT + _SECOND_RETRY_SECTION_TEX.format(
+    second_retry_system = SYSTEM_PROMPT + _TEX_ADDENDUM + _SECOND_RETRY_SECTION_TEX.format(
         actual_pages=actual_pages,
         target_pages=target_pages,
         mod_deg=mod_deg_val,

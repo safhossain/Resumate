@@ -42,6 +42,7 @@ from ..models import (
     ModelsResponse,
     PageInfoResponse,
     RetryRequest,
+    StageDownload,
     TailorRequest,
     TailorResponse,
 )
@@ -53,6 +54,39 @@ _MOD_DEG_MAP = {m.value: m for m in MOD_DEG}
 
 
 # ── helpers ─────────────────────────────────────────────────────────
+
+
+def _tex_brace_balance(s: str) -> int:
+    """Net brace depth of *s* (positive = unclosed '{', negative = extra '}')."""
+    depth = 0
+    for ch in s:
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+    return depth
+
+
+def _normalize_tex_values(mod_fields: dict, original_fields: dict) -> dict:
+    """For .tex files: strip trailing '}' from LLM-returned values when the LLM
+    closed more braces than the original selected text had.
+
+    This handles the common case where the LLM "completes" a partial LaTeX
+    expression (e.g. turns ``\\textbf{Name`` → ``\\textbf{Name}``) when the
+    template already provides the matching ``}``.  We strip the extra trailing
+    ``}`` characters so the brace depth of the returned value equals that of
+    the original.
+    """
+    result = {}
+    for key, returned in mod_fields.items():
+        original = original_fields.get(key, "")
+        orig_bal = _tex_brace_balance(original)
+        ret_val = returned
+        # Strip trailing `}` while returned balance is more negative than original
+        while _tex_brace_balance(ret_val) < orig_bal and ret_val and ret_val[-1] == "}":
+            ret_val = ret_val[:-1]
+        result[key] = ret_val
+    return result
 
 
 def _build_context(mod_fields: dict, sensitive_fields: dict) -> dict[str, str]:
@@ -287,8 +321,10 @@ async def tailor(req: TailorRequest):
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
-    llm_resp = CALL(payload, model=model, page_hint=page_hint, baseline_fields=baseline_fields)
+    llm_resp = CALL(payload, model=model, page_hint=page_hint, baseline_fields=baseline_fields, file_format=fmt)
     mod_fields = llm_resp["placeholders"]
+    if fmt == "tex":
+        mod_fields = _normalize_tex_values(mod_fields, fields)
     initial_changes: str = llm_resp.get("changes_made", "")
     changes_log: list[ChangeLogEntry] = [
         ChangeLogEntry(
@@ -310,11 +346,84 @@ async def tailor(req: TailorRequest):
     }
 
     clean_ctx = _build_context(mod_fields, sensitive_fields)
-    output_path = handler.post_llm_process(clean_ctx, metadata=run_meta)
+    render_error: str | None = None
+    try:
+        output_path = handler.post_llm_process(clean_ctx, metadata=run_meta)
+    except RuntimeError as exc:
+        render_error = str(exc)
+        # Return partial response: LLM succeeded but render failed.
+        # Build a .tex source preview so the user still sees the output.
+        tex_source_preview = ""
+        try:
+            # The rendered .tex was written before gen_pdf was called; find it.
+            import glob as _glob
+            candidates = sorted(
+                (session_store.output_dir(req.session_id)).glob("*.tex"),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
+            if candidates:
+                tex_source_preview = candidates[0].read_text(encoding="utf-8")
+        except Exception:
+            pass
+
+        if tex_source_preview:
+            preview_html = (
+                '<p class="text-amber-400 text-sm mb-2 font-semibold">'
+                "PDF render failed — showing raw LaTeX source below.</p>"
+                f'<pre class="text-xs text-gray-300 whitespace-pre-wrap overflow-x-auto">'
+                f"{html_mod.escape(tex_source_preview)}</pre>"
+            )
+        else:
+            preview_html = (
+                '<p class="text-red-400 text-sm">'
+                f"PDF render failed: {html_mod.escape(render_error)}</p>"
+            )
+
+        output_info = {
+            "output_id": output_id,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "file_path": str(candidates[0]) if tex_source_preview else "",
+            "mod_fields": mod_fields,
+            "page_info": None,
+            "retry_number": 0,
+            "model": model,
+            "moddeg": mod_deg.value,
+            "faux": req.faux,
+            "pages": req.pages,
+            "job_posting": req.job_posting,
+            "acc": req.acc,
+            "changes_log": [e.model_dump() for e in changes_log],
+            "render_error": render_error,
+        }
+        session_store.add_output(req.session_id, output_info)
+
+        return TailorResponse(
+            output_id=output_id,
+            preview_html=preview_html,
+            download_url=f"/api/output/{req.session_id}/{output_id}/download",
+            page_info=None,
+            can_retry=False,
+            retry_number=0,
+            changes_made=changes_made or None,
+            changes_log=changes_log,
+            render_error=render_error,
+            stage_downloads=[
+                StageDownload(
+                    stage="initial",
+                    label="Stage 1 — Initial (.tex source only, PDF render failed)",
+                    tex_url=f"/api/output/{req.session_id}/{output_id}/download/stage/initial/tex"
+                    if tex_source_preview else None,
+                )
+            ],
+        )
 
     page_info_resp: PageInfoResponse | None = None
     can_retry = False
     retry_number = 0
+
+    # Preserve initial output path before any auto-retry overwrites it.
+    initial_output_path: Path | None = output_path
 
     if req.pages and handler_cls in (DOCXf, J2f):
         is_tex = handler_cls is J2f
@@ -346,6 +455,8 @@ async def tailor(req: TailorRequest):
                     model=model,
                 )
                 mod_fields = retry_resp["placeholders"]
+                if fmt == "tex":
+                    mod_fields = _normalize_tex_values(mod_fields, fields)
                 retry_changes = retry_resp.get("changes_made", "")
                 changes_made = retry_changes or changes_made
                 clean_ctx = _build_context(mod_fields, sensitive_fields)
@@ -382,10 +493,35 @@ async def tailor(req: TailorRequest):
 
     preview_html = _generate_preview(output_path, fmt)
 
+    # Build per-stage download metadata.
+    is_tex_fmt = fmt == "tex"
+    auto_retried = retry_number > 0  # initial_output_path differs from output_path
+
+    stage_downloads: list[StageDownload] = []
+    # Stage 1 — initial
+    stage_downloads.append(StageDownload(
+        stage="initial",
+        label="Stage 1 — Initial",
+        pdf_url=f"/api/output/{req.session_id}/{output_id}/download/stage/initial",
+        tex_url=f"/api/output/{req.session_id}/{output_id}/download/stage/initial/tex" if is_tex_fmt else None,
+    ))
+    # Stage 2 — auto-retry (only when it actually happened)
+    if auto_retried:
+        stage_downloads.append(StageDownload(
+            stage="auto_retry",
+            label="Stage 2 — Page-fit retry",
+            pdf_url=f"/api/output/{req.session_id}/{output_id}/download/stage/auto_retry",
+            tex_url=f"/api/output/{req.session_id}/{output_id}/download/stage/auto_retry/tex" if is_tex_fmt else None,
+        ))
+
     output_info = {
         "output_id": output_id,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "file_path": str(output_path),
+        "tex_path": str(output_path.with_suffix(".tex")) if is_tex_fmt else None,
+        # Stored only when auto-retry produced a different file from the initial pass.
+        "initial_file_path": str(initial_output_path) if auto_retried else None,
+        "initial_tex_path": str(initial_output_path.with_suffix(".tex")) if (is_tex_fmt and auto_retried) else None,
         "mod_fields": mod_fields,
         "page_info": page_info_resp.model_dump() if page_info_resp else None,
         "retry_number": retry_number,
@@ -408,6 +544,7 @@ async def tailor(req: TailorRequest):
         retry_number=retry_number,
         changes_made=changes_made or None,
         changes_log=changes_log,
+        stage_downloads=stage_downloads,
     )
 
 
@@ -440,7 +577,7 @@ async def retry(req: RetryRequest):
     job_posting = prev_output["job_posting"]
     acc = prev_output["acc"]
 
-    _, sensitive_fields = _split_placeholder_dicts(session["placeholders"])
+    original_fields, sensitive_fields = _split_placeholder_dicts(session["placeholders"])
 
     handler = _handler_for(fmt, template_path, out_dir)
     full_resume = handler.get_resume_str()
@@ -477,6 +614,8 @@ async def retry(req: RetryRequest):
     )
 
     new_mod = llm_resp["placeholders"]
+    if is_tex:
+        new_mod = _normalize_tex_values(new_mod, original_fields)
     changes_made_retry: str = llm_resp.get("changes_made", "")
     retry_number = prev_output["retry_number"] + 1
 
@@ -526,10 +665,23 @@ async def retry(req: RetryRequest):
 
     preview_html = _generate_preview(output_path, fmt)
 
+    is_tex_fmt = fmt == "tex"
+    stage_downloads: list[StageDownload] = [
+        StageDownload(
+            stage="manual_retry",
+            label=f"Stage {len(changes_log)} — Manual retry #{retry_number}",
+            pdf_url=f"/api/output/{req.session_id}/{output_id}/download/stage/manual_retry",
+            tex_url=f"/api/output/{req.session_id}/{output_id}/download/stage/manual_retry/tex" if is_tex_fmt else None,
+        )
+    ]
+
     output_info = {
         "output_id": output_id,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "file_path": str(output_path),
+        "tex_path": str(output_path.with_suffix(".tex")) if is_tex_fmt else None,
+        "initial_file_path": None,
+        "initial_tex_path": None,
         "mod_fields": new_mod,
         "page_info": page_info_resp.model_dump() if page_info_resp else None,
         "retry_number": retry_number,
@@ -552,6 +704,7 @@ async def retry(req: RetryRequest):
         retry_number=retry_number,
         changes_made=changes_made_retry or None,
         changes_log=changes_log,
+        stage_downloads=stage_downloads,
     )
 
 
