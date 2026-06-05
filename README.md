@@ -51,12 +51,16 @@ UI:     http://localhost:5173
 Option to run the above two services separately:
 Terminal 1:
 > uvicorn backend.api.main:app --reload
+
 Terminal 2:
 > npm run dev --prefix frontend/resumate-webapp
 
 ### Option 2: CLI ONLY
 Default (uses all default flags)
 > python -m backend.main
+
+Help:
+> python -m backend.main -h
 
 #### Examples:
 
