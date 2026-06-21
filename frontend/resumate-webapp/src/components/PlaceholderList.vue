@@ -17,6 +17,79 @@ watch(
   },
 )
 
+/* ── scroll-into-view on highlight click ──────────────────────────────
+ * When a highlight is clicked in the document viewer, the session store
+ * emits a `scrollRequest`. Scroll the matching row to the top of the list;
+ * the browser clamps scrollTop to its max, so rows near the bottom simply
+ * become visible instead of being forced to the (impossible) top. */
+watch(
+  () => session.scrollRequest,
+  async (req) => {
+    const ul = listEl.value
+    if (!req || !ul) return
+    await nextTick()
+    let target: HTMLElement | null = null
+    for (const child of Array.from(ul.children)) {
+      if ((child as HTMLElement).dataset.phKey === req.key) {
+        target = child as HTMLElement
+        break
+      }
+    }
+    if (!target) return
+    const delta = target.getBoundingClientRect().top - ul.getBoundingClientRect().top
+    ul.scrollTo({ top: ul.scrollTop + delta, behavior: 'smooth' })
+  },
+)
+
+/* ── drag & drop reordering ───────────────────────────────────────── */
+// `dragKey` arms the native `draggable` attribute on a single row so that a
+// drag can only start from the grip handle (keeps text selection / inputs usable).
+const dragKey = ref<string | null>(null)
+const dragIndex = ref<number | null>(null)
+const overIndex = ref<number | null>(null)
+
+function armDrag(key: string) {
+  dragKey.value = key
+}
+
+function onHandleMouseUp() {
+  // Click without dragging: disarm so the row isn't left draggable.
+  if (dragIndex.value === null) dragKey.value = null
+}
+
+function onDragStart(idx: number, e: DragEvent) {
+  dragIndex.value = idx
+  overIndex.value = idx
+  if (e.dataTransfer) {
+    e.dataTransfer.effectAllowed = 'move'
+    e.dataTransfer.setData('text/plain', String(idx)) // Firefox requires data
+  }
+}
+
+function onDragOver(idx: number) {
+  if (dragIndex.value === null) return
+  overIndex.value = idx
+}
+
+function onDrop(idx: number) {
+  const from = dragIndex.value
+  if (from === null || from === idx) {
+    resetDrag()
+    return
+  }
+  const keys = session.placeholderList.map((p) => p.key)
+  const [moved] = keys.splice(from, 1)
+  keys.splice(idx, 0, moved)
+  session.reorderPlaceholders(keys)
+  resetDrag()
+}
+
+function resetDrag() {
+  dragKey.value = null
+  dragIndex.value = null
+  overIndex.value = null
+}
+
 /* ── per-row rename state ─────────────────────────────────────────── */
 const editingKey = ref<string | null>(null)
 const editValue  = ref('')
@@ -124,13 +197,37 @@ function downloadPlaceholders() {
 
     <ul ref="listEl" class="space-y-1.5 max-h-56 overflow-y-auto">
       <li
-        v-for="ph in session.placeholderList"
+        v-for="(ph, idx) in session.placeholderList"
         :key="ph.key"
-        class="flex items-start gap-2 text-sm px-2 py-1.5 rounded bg-gray-800/40"
+        :data-ph-key="ph.key"
+        :draggable="dragKey === ph.key"
+        class="flex items-start gap-2 text-sm px-2 py-1.5 rounded bg-gray-800/40 transition-colors"
+        :class="{
+          'opacity-40': dragIndex === idx,
+          'ring-1 ring-blue-500/60': overIndex === idx && dragIndex !== null && dragIndex !== idx,
+        }"
+        @dragstart="onDragStart(idx, $event)"
+        @dragover.prevent="onDragOver(idx)"
+        @drop.prevent="onDrop(idx)"
+        @dragend="resetDrag"
       >
+        <!-- drag handle -->
+        <button
+          class="self-center flex-shrink-0 text-gray-600 hover:text-gray-300 cursor-grab active:cursor-grabbing"
+          title="Drag to reorder"
+          @mousedown="armDrag(ph.key)"
+          @mouseup="onHandleMouseUp"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" class="w-3 h-3.5">
+            <circle cx="5" cy="3" r="1.3" /><circle cx="11" cy="3" r="1.3" />
+            <circle cx="5" cy="8" r="1.3" /><circle cx="11" cy="8" r="1.3" />
+            <circle cx="5" cy="13" r="1.3" /><circle cx="11" cy="13" r="1.3" />
+          </svg>
+        </button>
+
         <!-- type toggle -->
         <button
-          class="mt-0.5 w-4 h-4 rounded-full flex-shrink-0 flex items-center justify-center transition-colors"
+          class="self-center w-4 h-4 rounded-full flex-shrink-0 flex items-center justify-center transition-colors"
           :class="ph.type === 'tailor' ? 'bg-blue-500/30 hover:bg-amber-500/30' : 'bg-amber-500/30 hover:bg-blue-500/30'"
           :title="`Switch to ${ph.type === 'tailor' ? 'sensitive' : 'tailor'}`"
           @click="session.togglePlaceholderType(ph.key)"

@@ -11,6 +11,7 @@ import {
   removePlaceholder as apiRemovePh,
   updatePlaceholderType as apiUpdatePhType,
   renamePlaceholder as apiRenamePh,
+  reorderPlaceholders as apiReorderPh,
   listSessions as apiListSessions,
   getSession as apiGetSession,
   deleteSession as apiDeleteSession,
@@ -34,6 +35,18 @@ export const useSessionStore = defineStore('session', () => {
   const texPdfUrl = ref<string | null>(null)
   const isUploading = ref(false)
   const savedSessions = ref<SessionSummary[]>([])
+
+  /**
+   * Cross-component signal: ask the placeholder list to scroll a given
+   * placeholder into view (top-aligned when possible). A fresh object is
+   * emitted each time so repeat clicks of the same key still trigger.
+   */
+  const scrollRequest = ref<{ key: string; nonce: number } | null>(null)
+  let _scrollNonce = 0
+  function requestScrollToPlaceholder(key: string) {
+    _scrollNonce += 1
+    scrollRequest.value = { key, nonce: _scrollNonce }
+  }
 
   const hasSession = computed(() => sessionId.value !== null)
   const placeholderList = computed(() => Object.values(placeholders.value))
@@ -127,6 +140,25 @@ export const useSessionStore = defineStore('session', () => {
     }
   }
 
+  async function reorderPlaceholders(orderedKeys: string[]) {
+    if (!sessionId.value) return
+    const current = placeholders.value
+    const rebuilt: Record<string, PlaceholderResponse> = {}
+    for (const k of orderedKeys) {
+      if (current[k]) rebuilt[k] = current[k]
+    }
+    // Safety: keep any key not present in the supplied order.
+    for (const k of Object.keys(current)) {
+      if (!(k in rebuilt)) rebuilt[k] = current[k]
+    }
+    placeholders.value = rebuilt // optimistic — list reflects new order immediately
+    try {
+      await apiReorderPh(sessionId.value, Object.keys(rebuilt))
+    } catch {
+      /* keep optimistic order; backend resyncs on next session load */
+    }
+  }
+
   async function loadSessions() {
     savedSessions.value = await apiListSessions()
   }
@@ -181,6 +213,9 @@ export const useSessionStore = defineStore('session', () => {
     renamePlaceholder,
     togglePlaceholderType,
     updatePlaceholderValue,
+    reorderPlaceholders,
+    scrollRequest,
+    requestScrollToPlaceholder,
     loadSessions,
     loadSession,
     removeSession,

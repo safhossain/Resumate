@@ -37,11 +37,13 @@ from backend.parsers_and_generators.visual_lines import analyze_mbps
 
 from ..models import (
     ChangeLogEntry,
+    FieldDiff,
     GenerateTemplateRequest,
     GenerateTemplateResponse,
     ModelsResponse,
     PageInfoResponse,
     RetryRequest,
+    StageDiff,
     StageDownload,
     TailorRequest,
     TailorResponse,
@@ -94,6 +96,63 @@ def _build_context(mod_fields: dict, sensitive_fields: dict) -> dict[str, str]:
     ctx.update(mod_fields)
     ctx = resolve_placeholders(ctx)
     return {k: v for k, v in ctx.items() if v is not None}
+
+
+# ── diff helpers ────────────────────────────────────────────────────
+#
+# Only placeholder (tailor) values change between stages — the template is
+# read-only — so diffs are computed per placeholder key. Each changed key
+# yields a git-style hunk: the base value as the "-" side and the compared
+# value as the "+" side.
+
+_REMOVE_SENTINEL = "REMOVE_BULLETPOINT"
+
+
+def _diff_fields(base: dict, new: dict) -> list[FieldDiff]:
+    """Return one FieldDiff per placeholder key whose value changed."""
+    keys = list(dict.fromkeys([*base.keys(), *new.keys()]))
+    diffs: list[FieldDiff] = []
+    for key in keys:
+        old_val = base.get(key, "") or ""
+        new_val = new.get(key, "") or ""
+        if old_val == new_val:
+            continue
+        if not old_val.strip():
+            change_type = "added"
+        elif not new_val.strip() or new_val.strip() == _REMOVE_SENTINEL:
+            change_type = "removed"
+        else:
+            change_type = "modified"
+        diffs.append(
+            FieldDiff(key=key, old=old_val, new=new_val, change_type=change_type)
+        )
+    return diffs
+
+
+def _build_stage_diffs(base_fields: dict, stages: list[dict]) -> list[StageDiff]:
+    """Build per-stage vs-original / vs-previous field diffs.
+
+    ``stages`` is the ordered chain of render snapshots (initial → auto_retry →
+    manual_retry(s)); ``base_fields`` is the pre-LLM "original" snapshot.
+    """
+    result: list[StageDiff] = []
+    prev_fields = base_fields
+    prev_label = "Original"
+    for i, st in enumerate(stages, start=1):
+        cur = st.get("fields") or {}
+        result.append(
+            StageDiff(
+                stage=st["stage"],
+                label=st["label"],
+                stage_index=i,
+                vs_original=_diff_fields(base_fields, cur),
+                vs_previous=_diff_fields(prev_fields, cur),
+                previous_label=prev_label,
+            )
+        )
+        prev_fields = cur
+        prev_label = st["label"]
+    return result
 
 
 def _handler_for(fmt: str, template_path: Path, out_dir: Path):
@@ -335,6 +394,13 @@ async def tailor(req: TailorRequest):
     ]
     changes_made: str = initial_changes
 
+    # Per-stage placeholder-value snapshots for diffing. ``fields`` here is the
+    # pre-LLM "original" baseline; ``mod_fields`` is the initial tailoring.
+    base_fields: dict = dict(fields)
+    stages: list[dict] = [
+        {"stage": "initial", "label": "Initial tailoring", "fields": dict(mod_fields)}
+    ]
+
     run_ts = int(time.time())
     output_id = uuid.uuid4().hex[:8]
     run_meta = {
@@ -395,6 +461,8 @@ async def tailor(req: TailorRequest):
             "acc": req.acc,
             "changes_log": [e.model_dump() for e in changes_log],
             "render_error": render_error,
+            "base_fields": base_fields,
+            "stages": stages,
         }
         session_store.add_output(req.session_id, output_info)
 
@@ -408,6 +476,7 @@ async def tailor(req: TailorRequest):
             changes_made=changes_made or None,
             changes_log=changes_log,
             render_error=render_error,
+            stage_diffs=_build_stage_diffs(base_fields, stages),
             stage_downloads=[
                 StageDownload(
                     stage="initial",
@@ -478,17 +547,25 @@ async def tailor(req: TailorRequest):
                     )
                     can_retry = not within2
 
+                _auto_retry_label = (
+                    f"Page-fit retry "
+                    f"({pi['page_count']}p \u2192 target {req.pages}p)"
+                )
                 changes_log.append(
                     ChangeLogEntry(
                         stage="auto_retry",
-                        label=(
-                            f"Page-fit retry "
-                            f"({pi['page_count']}p \u2192 target {req.pages}p)"
-                        ),
+                        label=_auto_retry_label,
                         text=retry_changes,
                         page_count=pi2["page_count"] if pi2 else None,
                         target_pages=req.pages,
                     )
+                )
+                stages.append(
+                    {
+                        "stage": "auto_retry",
+                        "label": _auto_retry_label,
+                        "fields": dict(mod_fields),
+                    }
                 )
 
     preview_html = _generate_preview(output_path, fmt)
@@ -532,8 +609,12 @@ async def tailor(req: TailorRequest):
         "job_posting": req.job_posting,
         "acc": req.acc,
         "changes_log": [e.model_dump() for e in changes_log],
+        "base_fields": base_fields,
+        "stages": stages,
     }
     session_store.add_output(req.session_id, output_info)
+
+    stage_diffs = _build_stage_diffs(base_fields, stages)
 
     return TailorResponse(
         output_id=output_id,
@@ -545,6 +626,7 @@ async def tailor(req: TailorRequest):
         changes_made=changes_made or None,
         changes_log=changes_log,
         stage_downloads=stage_downloads,
+        stage_diffs=stage_diffs,
     )
 
 
@@ -622,6 +704,20 @@ async def retry(req: RetryRequest):
     # Carry forward the prior log and append this manual retry entry
     prev_log_raw = prev_output.get("changes_log") or []
     changes_log: list[ChangeLogEntry] = [ChangeLogEntry(**e) for e in prev_log_raw]
+
+    # Carry forward the per-stage field-snapshot chain for diffing. Older
+    # outputs may predate this; fall back to the original fields + the previous
+    # output's final field snapshot so the chain still has a "previous" entry.
+    base_fields: dict = prev_output.get("base_fields") or dict(original_fields)
+    stages: list[dict] = [dict(s) for s in (prev_output.get("stages") or [])]
+    if not stages:
+        stages = [
+            {
+                "stage": "initial",
+                "label": "Initial tailoring",
+                "fields": dict(prev_mod_fields),
+            }
+        ]
     run_ts = int(time.time())
     output_id = uuid.uuid4().hex[:8]
     run_meta = {
@@ -650,17 +746,25 @@ async def retry(req: RetryRequest):
         )
         can_retry = not within
 
+    _manual_retry_label = (
+        f"Manual retry #{retry_number} "
+        f"({actual}p \u2192 target {pages}p)"
+    )
     changes_log.append(
         ChangeLogEntry(
             stage="manual_retry",
-            label=(
-                f"Manual retry #{retry_number} "
-                f"({actual}p \u2192 target {pages}p)"
-            ),
+            label=_manual_retry_label,
             text=changes_made_retry,
             page_count=pi["page_count"] if pi else None,
             target_pages=pages,
         )
+    )
+    stages.append(
+        {
+            "stage": "manual_retry",
+            "label": _manual_retry_label,
+            "fields": dict(new_mod),
+        }
     )
 
     preview_html = _generate_preview(output_path, fmt)
@@ -692,8 +796,12 @@ async def retry(req: RetryRequest):
         "job_posting": job_posting,
         "acc": acc,
         "changes_log": [e.model_dump() for e in changes_log],
+        "base_fields": base_fields,
+        "stages": stages,
     }
     session_store.add_output(req.session_id, output_info)
+
+    stage_diffs = _build_stage_diffs(base_fields, stages)
 
     return TailorResponse(
         output_id=output_id,
@@ -705,6 +813,7 @@ async def retry(req: RetryRequest):
         changes_made=changes_made_retry or None,
         changes_log=changes_log,
         stage_downloads=stage_downloads,
+        stage_diffs=stage_diffs,
     )
 
 

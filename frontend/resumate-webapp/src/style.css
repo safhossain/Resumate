@@ -49,6 +49,20 @@
 }
 
 /*
+ * Over already-marked text, suppress the highlighter pen cursor — the region
+ * is no longer selectable for marking. Use the hand (pointer) cursor to signal
+ * it's interactive (hover tooltip / right-click menu) without implying it's
+ * still markable. Unlayered rules beat the @layer base cursor regardless of
+ * specificity.
+ */
+.placeholder-tailor-inline,
+.placeholder-tailor-inline *,
+.placeholder-sensitive-inline,
+.placeholder-sensitive-inline * {
+  cursor: pointer;
+}
+
+/*
  * Key badges via CSS ::after — NOT as DOM children.
  * This is critical: DOM text nodes inside the element must match
  * the original document text exactly, so the tree walker computes

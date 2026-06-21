@@ -3,11 +3,16 @@ from __future__ import annotations
 import re
 
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
 
 from ..models import PlaceholderCreate, PlaceholderResponse
 from .. import session_store
 
 router = APIRouter()
+
+
+class PlaceholderReorderRequest(BaseModel):
+    ordered_keys: list[str]
 
 # ── key sanitization ────────────────────────────────────────────────
 
@@ -186,6 +191,26 @@ async def add_placeholder(body: PlaceholderCreate):
         value=ph.get("value"),
         warning=tex_warning,
     )
+
+
+@router.patch("/placeholder/{session_id}/reorder")
+async def reorder_placeholders(session_id: str, body: PlaceholderReorderRequest):
+    try:
+        session = session_store.get_session(session_id)
+    except FileNotFoundError:
+        raise HTTPException(404, "Session not found")
+
+    existing = set(session["placeholders"].keys())
+    incoming = list(body.ordered_keys)
+    if len(incoming) != len(set(incoming)):
+        raise HTTPException(400, "ordered_keys contains duplicates")
+    if set(incoming) != existing:
+        raise HTTPException(
+            400, "ordered_keys must contain exactly the existing placeholder keys"
+        )
+
+    session_store.reorder_placeholders(session_id, incoming)
+    return {"ok": True}
 
 
 @router.patch("/placeholder/{session_id}/{key}/rename")

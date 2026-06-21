@@ -79,6 +79,22 @@ export interface StageDownload {
   tex_url: string | null
 }
 
+export interface FieldDiff {
+  key: string
+  old: string
+  new: string
+  change_type: 'added' | 'removed' | 'modified'
+}
+
+export interface StageDiff {
+  stage: 'initial' | 'auto_retry' | 'manual_retry'
+  label: string
+  stage_index: number
+  vs_original: FieldDiff[]
+  vs_previous: FieldDiff[]
+  previous_label: string
+}
+
 export interface TailorResponse {
   output_id: string
   preview_html: string
@@ -90,6 +106,7 @@ export interface TailorResponse {
   changes_log: ChangeLogEntry[]
   render_error: string | null
   stage_downloads: StageDownload[]
+  stage_diffs: StageDiff[]
 }
 
 export interface SessionSummary {
@@ -165,6 +182,17 @@ export function renamePlaceholder(
     `/placeholder/${sessionId}/${encodeURIComponent(key)}/rename?new_key=${encodeURIComponent(newKey)}`,
     { method: 'PATCH' },
   )
+}
+
+export function reorderPlaceholders(
+  sessionId: string,
+  orderedKeys: string[],
+): Promise<{ ok: boolean }> {
+  return request(`/placeholder/${sessionId}/reorder`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ordered_keys: orderedKeys }),
+  })
 }
 
 export function tailorResume(data: TailorRequest): Promise<TailorResponse> {

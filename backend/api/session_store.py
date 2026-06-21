@@ -130,6 +130,28 @@ def remove_placeholder(session_id: str, key: str) -> None:
     _save(session_id, data)
 
 
+def reorder_placeholders(session_id: str, ordered_keys: list[str]) -> dict:
+    """Rebuild the placeholders dict in *ordered_keys* order.
+
+    Reordering is purely organizational — it does not alter the template
+    (token generation sorts by offset), so ``template_generated`` is left
+    untouched. Any existing key not present in ``ordered_keys`` is appended
+    at the end in its current order as a safety net.
+    """
+    data = _load(session_id)
+    phs = data["placeholders"]
+    new_phs: dict = {}
+    for k in ordered_keys:
+        if k in phs:
+            new_phs[k] = phs[k]
+    for k, v in phs.items():
+        if k not in new_phs:
+            new_phs[k] = v
+    data["placeholders"] = new_phs
+    _save(session_id, data)
+    return new_phs
+
+
 def add_output(session_id: str, output_info: dict) -> None:
     data = _load(session_id)
     data["outputs"].append(output_info)
