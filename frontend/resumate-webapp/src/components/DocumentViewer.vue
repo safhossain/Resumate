@@ -22,6 +22,51 @@ const popover = ref<{
   pendingType?: 'tailor' | 'sensitive'
 } | null>(null)
 
+/* ── hover tooltip over an existing placeholder ─────────────────── */
+const hoverTip = ref<{ x: number; y: number; type: 'tailor' | 'sensitive'; key: string } | null>(null)
+
+/* ── right-click context menu over an existing placeholder ──────── */
+const ctxMenuEl = ref<HTMLDivElement | null>(null)
+const ctxMenu = ref<{ x: number; y: number; type: 'tailor' | 'sensitive'; key: string } | null>(null)
+
+/* ── resize handles shown on hover over an existing placeholder ─── */
+type HandlePoint = { x: number; y: number; h: number }
+const resizeHandles = ref<{
+  key: string
+  type: 'tailor' | 'sensitive'
+  start: HandlePoint
+  end: HandlePoint
+} | null>(null)
+const dragging = ref(false)
+/** Live draft of the dragged placeholder's range; overrides the highlight. */
+const dragDraft = ref<{ key: string; start: number; end: number } | null>(null)
+/** Mutable per-drag bookkeeping (not reactive). */
+let dragState: {
+  key: string
+  which: 'start' | 'end'
+  origStart: number
+  origEnd: number
+} | null = null
+/** Suppress click/selection side-effects briefly after a drag ends. */
+let suppressInteractionUntil = 0
+
+const handleColor = computed(() =>
+  resizeHandles.value?.type === 'sensitive' ? 'rgb(245, 158, 11)' : 'rgb(59, 130, 246)',
+)
+
+function handleStyle(side: 'start' | 'end'): Record<string, string> {
+  const rh = resizeHandles.value
+  if (!rh) return {}
+  const p = rh[side]
+  return {
+    left: p.x + 'px',
+    top: p.y + 'px',
+    height: p.h + 'px',
+    '--handle-color': handleColor.value,
+    pointerEvents: dragging.value ? 'none' : 'auto',
+  }
+}
+
 /** The name being typed in the quick-label input */
 const quickLabelName = ref('')
 
@@ -44,8 +89,14 @@ function showToast(message: string, kind: 'error' | 'warning' = 'error', ms = 55
 /* ── dismiss popover on outside click ───────────────────────────── */
 
 function onDocumentMouseDown(e: MouseEvent) {
-  if (!popover.value) return
   const target = e.target as HTMLElement
+
+  // Dismiss the right-click menu on any click outside it.
+  if (ctxMenu.value && !ctxMenuEl.value?.contains(target)) {
+    ctxMenu.value = null
+  }
+
+  if (!popover.value) return
   if (popoverEl.value?.contains(target)) return
 
   // In naming phase, clicking outside creates with auto-name (or typed name if any).
@@ -66,6 +117,10 @@ function onDocumentMouseDown(e: MouseEvent) {
 }
 
 function onDocumentKeyDown(e: KeyboardEvent) {
+  if (e.key === 'Escape' && ctxMenu.value) {
+    ctxMenu.value = null
+    return
+  }
   if (!popover.value) return
   // Phase 1: Enter defaults to 'tailor'
   if (e.key === 'Enter' && !popover.value.pendingType) {
@@ -81,6 +136,10 @@ onMounted(() => {
 onUnmounted(() => {
   document.removeEventListener('mousedown', onDocumentMouseDown)
   document.removeEventListener('keydown', onDocumentKeyDown)
+  document.removeEventListener('mousemove', onDragMove)
+  document.removeEventListener('mouseup', onDragEnd)
+  document.body.style.cursor = ''
+  document.body.style.userSelect = ''
 })
 
 /* ── selection → offset mapping ─────────────────────────────────── */
@@ -184,9 +243,20 @@ function getSelectionInfo(): { text: string; start: number; end: number } | null
 /* ── popover on text selection ──────────────────────────────────── */
 
 function onMouseUp() {
+  if (dragging.value || Date.now() < suppressInteractionUntil) return
   setTimeout(async () => {
     const info = getSelectionInfo()
     if (!info || !viewerEl.value) {
+      return
+    }
+
+    // If the selection overlaps an already-marked placeholder, do nothing:
+    // re-marking it would 409, and clearing now lives in the right-click menu.
+    const overlaps = Object.values(session.placeholders).some(
+      (ph) => ph.start_offset < info.end && ph.end_offset > info.start,
+    )
+    if (overlaps) {
+      window.getSelection()?.removeAllRanges()
       return
     }
 
@@ -222,6 +292,333 @@ function onMouseUp() {
 function closePopover() {
   popover.value = null
   window.getSelection()?.removeAllRanges()
+}
+
+/* ── hover / right-click on existing placeholder spans ──────────── */
+
+function findPhSpan(target: EventTarget | null): HTMLElement | null {
+  const el = target as HTMLElement | null
+  if (!el || typeof el.closest !== 'function') return null
+  return el.closest<HTMLElement>(
+    '.placeholder-tailor-inline, .placeholder-sensitive-inline',
+  )
+}
+
+function phInfoFromSpan(
+  span: HTMLElement,
+): { key: string; type: 'tailor' | 'sensitive' } | null {
+  const key = span.dataset.phKey
+  if (!key) return null
+  const ph = session.placeholders[key]
+  const type: 'tailor' | 'sensitive' =
+    (ph?.type as 'tailor' | 'sensitive') ??
+    (span.classList.contains('placeholder-sensitive-inline') ? 'sensitive' : 'tailor')
+  return { key, type }
+}
+
+function isHandleTarget(target: EventTarget | null): boolean {
+  const el = target as HTMLElement | null
+  return !!(el && typeof el.closest === 'function' && el.closest('.ph-resize-handle'))
+}
+
+function onViewerMouseOver(e: MouseEvent) {
+  if (ctxMenu.value || dragging.value) return
+
+  const span = findPhSpan(e.target)
+  if (span && viewerEl.value) {
+    const info = phInfoFromSpan(span)
+    if (!info) return
+    const r = span.getBoundingClientRect()
+    const c = viewerEl.value.getBoundingClientRect()
+    hoverTip.value = {
+      x: r.left - c.left + viewerEl.value.scrollLeft + r.width / 2,
+      y: r.top - c.top + viewerEl.value.scrollTop,
+      type: info.type,
+      key: info.key,
+    }
+    showHandlesFor(info.key, info.type)
+    return
+  }
+
+  // Keep handles/tooltip alive while hovering a handle itself.
+  if (isHandleTarget(e.target)) return
+
+  hoverTip.value = null
+  resizeHandles.value = null
+}
+
+function onViewerMouseLeave() {
+  if (dragging.value) return
+  hoverTip.value = null
+  resizeHandles.value = null
+}
+
+/* ── resize handle positioning ──────────────────────────────────── */
+
+function cssEscapeKey(key: string): string {
+  const fn = (window as unknown as { CSS?: { escape?: (s: string) => string } }).CSS?.escape
+  return fn ? fn(key) : key
+}
+
+/** Span edges → handle points in the viewer's scroll-content coordinates. */
+function computeHandlePoints(key: string): { start: HandlePoint; end: HandlePoint } | null {
+  if (!contentEl.value || !viewerEl.value) return null
+  const spans = contentEl.value.querySelectorAll<HTMLElement>(
+    `[data-ph-key="${cssEscapeKey(key)}"]`,
+  )
+  if (!spans.length) return null
+  const rects: DOMRect[] = []
+  spans.forEach((s) => {
+    for (const r of Array.from(s.getClientRects())) rects.push(r as DOMRect)
+  })
+  if (!rects.length) return null
+  const first = rects[0]
+  const last = rects[rects.length - 1]
+  const v = viewerEl.value.getBoundingClientRect()
+  const sl = viewerEl.value.scrollLeft
+  const st = viewerEl.value.scrollTop
+  return {
+    start: { x: first.left - v.left + sl, y: first.top - v.top + st, h: first.height },
+    end: { x: last.right - v.left + sl, y: last.top - v.top + st, h: last.height },
+  }
+}
+
+function showHandlesFor(key: string, type: 'tailor' | 'sensitive') {
+  const pts = computeHandlePoints(key)
+  resizeHandles.value = pts ? { key, type, start: pts.start, end: pts.end } : null
+}
+
+function refreshHandles(key: string) {
+  const ph = session.placeholders[key]
+  if (!ph) {
+    resizeHandles.value = null
+    return
+  }
+  showHandlesFor(key, ph.type as 'tailor' | 'sensitive')
+}
+
+/* ── caret-from-point helpers (cross-browser) ───────────────────── */
+
+function caretRangeFromPoint(x: number, y: number): Range | null {
+  const d = document as Document & {
+    caretRangeFromPoint?: (x: number, y: number) => Range | null
+    caretPositionFromPoint?: (
+      x: number,
+      y: number,
+    ) => { offsetNode: Node; offset: number } | null
+  }
+  if (d.caretRangeFromPoint) return d.caretRangeFromPoint(x, y)
+  if (d.caretPositionFromPoint) {
+    const p = d.caretPositionFromPoint(x, y)
+    if (!p) return null
+    const r = document.createRange()
+    r.setStart(p.offsetNode, p.offset)
+    r.collapse(true)
+    return r
+  }
+  return null
+}
+
+/** Map a viewport point to a raw_text offset, or null if off-text. */
+function offsetFromPoint(x: number, y: number): number | null {
+  const range = caretRangeFromPoint(x, y)
+  if (!range) return null
+  const el = findOffsetAncestor(range.startContainer)
+  if (!el) return null
+  const base = parseInt(el.dataset.offset!, 10)
+  return base + charOffsetInElement(el, range.startContainer, range.startOffset)
+}
+
+/** Caret rect for the dragged handle, so it visually follows the cursor. */
+function caretPointAt(x: number, y: number): HandlePoint | null {
+  if (!viewerEl.value) return null
+  const range = caretRangeFromPoint(x, y)
+  if (!range) return null
+  const rects = range.getClientRects()
+  let r: DOMRect | null = rects.length ? (rects[0] as DOMRect) : (range.getBoundingClientRect() as DOMRect)
+  if (!r || (r.height === 0 && r.width === 0)) {
+    const node = range.startContainer
+    const host = node.nodeType === Node.TEXT_NODE ? node.parentElement : (node as HTMLElement)
+    if (!host) return null
+    const hr = host.getBoundingClientRect()
+    r = new DOMRect(x, hr.top, 0, hr.height)
+  }
+  const v = viewerEl.value.getBoundingClientRect()
+  return {
+    x: r.left - v.left + viewerEl.value.scrollLeft,
+    y: r.top - v.top + viewerEl.value.scrollTop,
+    h: r.height || 18,
+  }
+}
+
+/* ── handle drag lifecycle ──────────────────────────────────────── */
+
+function onHandleMouseDown(which: 'start' | 'end', e: MouseEvent) {
+  if (e.button !== 0) return
+  e.preventDefault()
+  e.stopPropagation()
+  const rh = resizeHandles.value
+  if (!rh) return
+  const ph = session.placeholders[rh.key]
+  if (!ph) return
+
+  dragState = {
+    key: rh.key,
+    which,
+    origStart: ph.start_offset,
+    origEnd: ph.end_offset,
+  }
+  dragDraft.value = { key: rh.key, start: ph.start_offset, end: ph.end_offset }
+  dragging.value = true
+  hoverTip.value = null
+  ctxMenu.value = null
+  popover.value = null
+
+  document.body.style.cursor = 'ew-resize'
+  document.body.style.userSelect = 'none'
+  document.addEventListener('mousemove', onDragMove)
+  document.addEventListener('mouseup', onDragEnd)
+}
+
+function onDragMove(e: MouseEvent) {
+  if (!dragState || !dragDraft.value) return
+  e.preventDefault()
+  window.getSelection()?.removeAllRanges()
+
+  const off = offsetFromPoint(e.clientX, e.clientY)
+  if (off != null) {
+    let { start, end } = dragDraft.value
+    if (dragState.which === 'start') {
+      // Can't cross the (fixed) end handle; keep ≥ 1 char. Overlap with
+      // OTHER placeholders is allowed here — it 409s on drop.
+      start = Math.max(0, Math.min(off, end - 1))
+    } else {
+      end = Math.min(session.rawText.length, Math.max(off, start + 1))
+    }
+    if (start !== dragDraft.value.start || end !== dragDraft.value.end) {
+      dragDraft.value = { key: dragState.key, start, end }
+      applyHighlights()
+    }
+  }
+
+  // Reposition handles: the dragged one tracks the cursor caret; the other
+  // sits on the (re-rendered) span edge.
+  const pts = computeHandlePoints(dragState.key)
+  const dragged = caretPointAt(e.clientX, e.clientY)
+  if (resizeHandles.value && pts) {
+    resizeHandles.value = {
+      ...resizeHandles.value,
+      start: dragState.which === 'start' ? dragged ?? pts.start : pts.start,
+      end: dragState.which === 'end' ? dragged ?? pts.end : pts.end,
+    }
+  }
+}
+
+async function onDragEnd() {
+  document.removeEventListener('mousemove', onDragMove)
+  document.removeEventListener('mouseup', onDragEnd)
+  document.body.style.cursor = ''
+  document.body.style.userSelect = ''
+
+  const ds = dragState
+  const draft = dragDraft.value
+  dragState = null
+  dragging.value = false
+  suppressInteractionUntil = Date.now() + 120
+
+  if (!ds || !draft) {
+    dragDraft.value = null
+    applyHighlights()
+    return
+  }
+
+  // No effective change → just settle the handles back on the edges.
+  if (draft.start === ds.origStart && draft.end === ds.origEnd) {
+    dragDraft.value = null
+    applyHighlights()
+    refreshHandles(ds.key)
+    return
+  }
+
+  try {
+    await session.resizePlaceholder(ds.key, draft.start, draft.end)
+    dragDraft.value = null
+    await nextTick()
+    applyHighlights()
+    refreshHandles(ds.key)
+  } catch (err) {
+    // Revert the preview, flash the placeholder red, and explain.
+    dragDraft.value = null
+    applyHighlights()
+    flashError(ds.key)
+    refreshHandles(ds.key)
+    const raw = err instanceof Error ? err.message : String(err)
+    if (/^409/.test(raw) || /overlap/i.test(raw)) {
+      showToast('That edge would overlap another placeholder — resize reverted.', 'error', 4500)
+    } else {
+      showToast(`Couldn't resize placeholder: ${raw}`, 'error')
+    }
+  }
+}
+
+function flashError(key: string) {
+  if (!contentEl.value) return
+  const spans = contentEl.value.querySelectorAll<HTMLElement>(
+    `[data-ph-key="${cssEscapeKey(key)}"]`,
+  )
+  spans.forEach((s) => {
+    s.classList.add('ph-flash-error')
+    setTimeout(() => s.classList.remove('ph-flash-error'), 700)
+  })
+}
+
+function flashLocate(key: string) {
+  if (!contentEl.value) return
+  const spans = contentEl.value.querySelectorAll<HTMLElement>(
+    `[data-ph-key="${cssEscapeKey(key)}"]`,
+  )
+  spans.forEach((s) => {
+    s.classList.add('ph-flash-locate')
+    setTimeout(() => s.classList.remove('ph-flash-locate'), 900)
+  })
+}
+
+function onViewerClick(e: MouseEvent) {
+  // Left-click on an existing highlight: ask the placeholder list to scroll
+  // the associated box into view. Ignore clicks that are part of a text
+  // selection (handled by onMouseUp).
+  if (e.button !== 0) return
+  if (dragging.value || Date.now() < suppressInteractionUntil) return
+  if (isHandleTarget(e.target)) return
+  const sel = window.getSelection()
+  if (sel && !sel.isCollapsed) return
+  const span = findPhSpan(e.target)
+  if (!span) return
+  const key = span.dataset.phKey
+  if (key) session.requestScrollToPlaceholder(key)
+}
+
+function onViewerContextMenu(e: MouseEvent) {
+  const span = findPhSpan(e.target)
+  if (!span || !viewerEl.value) return // allow the native menu elsewhere
+  e.preventDefault()
+  const info = phInfoFromSpan(span)
+  if (!info) return
+  hoverTip.value = null
+  const c = viewerEl.value.getBoundingClientRect()
+  ctxMenu.value = {
+    x: e.clientX - c.left + viewerEl.value.scrollLeft,
+    y: e.clientY - c.top + viewerEl.value.scrollTop,
+    type: info.type,
+    key: info.key,
+  }
+}
+
+async function deletePlaceholderFromMenu() {
+  const key = ctxMenu.value?.key
+  ctxMenu.value = null
+  if (!key) return
+  await session.removePlaceholder(key)
 }
 
 async function markAs(type: 'tailor' | 'sensitive') {
@@ -305,8 +702,12 @@ function buildHighlightedContent(
   let pos = 0
 
   for (const ph of overlapping) {
-    const localStart = Math.max(0, ph.start_offset - elementOffset)
+    // Clamp to `pos` so a (transient, drag-preview) overlap with an
+    // earlier placeholder never duplicates characters — the earlier one
+    // already consumed the shared region.
+    const localStart = Math.max(pos, Math.max(0, ph.start_offset - elementOffset))
     const localEnd = Math.min(elementText.length, ph.end_offset - elementOffset)
+    if (localEnd <= localStart) continue
 
     if (localStart > pos) {
       result += textToInnerHtml(elementText.slice(pos, localStart))
@@ -327,10 +728,23 @@ function buildHighlightedContent(
   return result || '&nbsp;'
 }
 
+/**
+ * Placeholder list with the in-progress resize draft applied, so the
+ * highlight previews live as a handle is dragged.
+ */
+function currentPhList(): PlaceholderResponse[] {
+  const list = Object.values(session.placeholders)
+  const d = dragDraft.value
+  if (!d) return list
+  return list.map((p) =>
+    p.key === d.key ? { ...p, start_offset: d.start, end_offset: d.end } : p,
+  )
+}
+
 function applyHighlights() {
   if (!contentEl.value) return
   const els = contentEl.value.querySelectorAll<HTMLElement>('[data-offset]')
-  const phList = Object.values(session.placeholders)
+  const phList = currentPhList()
 
   els.forEach((el) => {
     const elOffset = parseInt(el.dataset.offset!, 10)
@@ -351,24 +765,81 @@ watch(
   { deep: true },
 )
 
-/* ── check if selection overlaps an existing placeholder ────────── */
-
-const overlappingKey = computed(() => {
-  if (!popover.value) return null
-  for (const ph of Object.values(session.placeholders)) {
-    if (
-      ph.start_offset < popover.value.endOffset &&
-      ph.end_offset > popover.value.startOffset
-    ) {
-      return ph.key
-    }
+/**
+ * Smooth-scroll the viewer to `targetTop`, then invoke `done` *after* the
+ * scroll settles. There's no reliable cross-browser "smooth scroll finished"
+ * promise, so we poll: complete once we reach the (clamped) target or motion
+ * stalls — with a hard timeout safety net.
+ */
+function scrollViewerThen(targetTop: number, done: () => void) {
+  const el = viewerEl.value
+  if (!el) return
+  const max = el.scrollHeight - el.clientHeight
+  const target = Math.max(0, Math.min(targetTop, max))
+  if (Math.abs(el.scrollTop - target) < 2) {
+    done()
+    return
   }
-  return null
-})
+  el.scrollTo({ top: target, behavior: 'smooth' })
+  const startTop = el.scrollTop
+  let last = startTop
+  let moved = false
+  let stable = 0
+  let elapsed = 0
+  const step = () => {
+    const cur = viewerEl.value?.scrollTop
+    if (cur == null) return
+    elapsed += 16
+    if (Math.abs(cur - startTop) > 1) moved = true
+    if (Math.abs(cur - target) <= 2) {
+      done()
+      return
+    }
+    stable = moved && Math.abs(cur - last) < 0.5 ? stable + 1 : 0
+    last = cur
+    if (stable >= 3 || elapsed > 1500) {
+      done()
+      return
+    }
+    requestAnimationFrame(step)
+  }
+  requestAnimationFrame(step)
+}
+
+/* Reciprocal of the placeholder-list scroll: a click on a placeholder row
+ * scrolls this viewer so the matching highlight is centered, then (once the
+ * scroll has settled) briefly pulses it. */
+watch(
+  () => session.scrollToHighlight,
+  async (req) => {
+    if (!req || !viewerEl.value || !contentEl.value) return
+    await nextTick()
+    const span = contentEl.value.querySelector<HTMLElement>(
+      `[data-ph-key="${cssEscapeKey(req.key)}"]`,
+    )
+    if (!span) return
+    const v = viewerEl.value.getBoundingClientRect()
+    const r = span.getBoundingClientRect()
+    const targetTop =
+      viewerEl.value.scrollTop + (r.top - v.top) - (viewerEl.value.clientHeight / 2 - r.height / 2)
+    scrollViewerThen(targetTop, () => flashLocate(req.key))
+  },
+)
+
 </script>
 
 <template>
-  <div class="relative overflow-auto bg-gray-900" ref="viewerEl" @mouseup="onMouseUp">
+  <div class="flex h-full bg-gray-900">
+    <!-- rendered resume — independent vertical scroll -->
+    <div
+      class="relative flex-1 min-w-0 overflow-auto"
+      ref="viewerEl"
+      @mouseup="onMouseUp"
+      @click="onViewerClick"
+      @mouseover="onViewerMouseOver"
+      @mouseleave="onViewerMouseLeave"
+      @contextmenu="onViewerContextMenu"
+    >
     <!-- empty state -->
     <div
       v-if="!session.hasSession"
@@ -378,88 +849,12 @@ const overlappingKey = computed(() => {
     </div>
 
     <!-- docx / txt / tex -->
-    <div v-else class="flex">
-      <div
-        ref="contentEl"
-        class="flex-1 p-6 pb-16 max-w-3xl mx-auto leading-relaxed cursor-text"
-        v-html="session.renderedHtml"
-      />
-
-      <!-- info box -->
-      <div class="w-56 flex-shrink-0 p-4 border-l border-gray-800">
-        <div class="rounded-lg bg-gray-800/50 border border-gray-700/50 p-3">
-          <p class="text-[11px] font-semibold text-gray-400 uppercase tracking-wider mb-2">How to use</p>
-          <ol class="text-[11px] text-gray-500 space-y-1.5 list-decimal list-inside leading-relaxed">
-            <li><span class="text-blue-400">Highlight</span> text to mark as a <b class="text-blue-400">tailor</b> (LLM rewrites) or <b class="text-amber-400">sensitive</b> (local-only) placeholder.</li>
-            <li>Paste the <b class="text-gray-300">job posting</b> in the left panel.</li>
-            <li>Pick model &amp; settings in the top bar.</li>
-            <li><b class="text-gray-400">Faux</b> (top bar): when on, the LLM may add plausible skills or experience that fit your profile and the job; when off, it only rewrites using facts already in your resume and ACC.</li>
-            <li>Hit <b class="text-gray-300">Tailor Resume</b>.</li>
-          </ol>
-          <p
-            class="mt-2.5 pt-2 border-t border-gray-700/50 flex gap-2 text-[10px] text-gray-500 leading-relaxed"
-            role="note"
-          >
-            <span
-              class="flex-shrink-0 w-4 h-4 rounded-full border border-gray-600 text-gray-400 flex items-center justify-center text-[9px] font-semibold font-sans"
-              aria-label="Additional tip"
-            >i</span>
-            <span>In <b class="text-gray-400">Placeholders</b>, click the colored dot to switch between <b class="text-blue-400">tailor</b> and <b class="text-amber-400">sensitive</b>.</span>
-          </p>
-          <p
-            class="mt-2.5 pt-2 border-t border-gray-700/50 flex gap-2 text-[10px] text-gray-500 leading-relaxed"
-            role="note"
-          >
-            <span
-              class="flex-shrink-0 w-4 h-4 rounded-full border border-gray-600 text-gray-400 flex items-center justify-center text-[9px] font-semibold font-sans"
-              aria-label="Sensitive value tip"
-            >i</span>
-            <span><b class="text-amber-400">Sensitive</b> rows show your <b class="text-gray-400">highlight</b> above and a <b class="text-gray-400">text field</b> below. That field is the value stitched into the output (not sent to the LLM). It starts as a copy of the highlight. Change it if the resume shows a placeholder, or if you want different wording in the final file.</span>
-          </p>
-          <p
-            class="mt-2.5 pt-2 border-t border-gray-700/50 flex gap-2 text-[10px] text-gray-500 leading-relaxed"
-            role="note"
-          >
-            <span
-              class="flex-shrink-0 w-4 h-4 rounded-full border border-gray-600 text-gray-400 flex items-center justify-center text-[9px] font-semibold font-sans"
-              aria-label="Placeholder naming tip"
-            >i</span>
-            <span><b class="text-gray-400">Auto-naming</b> picks a short key from what you highlighted (simple values like email/phone get obvious names; longer text uses the most salient words). Keys are always <b class="text-gray-400">lowercase</b> with <b class="text-gray-400">underscores only</b>, spaces and hyphens become underscores. <b class="text-gray-400">Rename</b> anytime: in <b class="text-gray-400">Placeholders</b>, click a key name, edit, then press Enter or click away to save.</span>
-          </p>
-          <p
-            class="mt-2.5 pt-2 border-t border-amber-900/40 flex gap-2 text-[10px] text-amber-700/80 leading-relaxed"
-            role="note"
-          >
-            <span
-              class="flex-shrink-0 w-4 h-4 rounded-full border border-amber-700/60 text-amber-500 flex items-center justify-center text-[9px] font-semibold font-sans"
-              aria-label="Auto-naming caution"
-            >!</span>
-            <span><b class="text-amber-500">Caution with auto-naming:</b> for long lists, the key may name one item rather than the whole (e.g. <b class="text-amber-400/80">vue</b> for a 9-library list). The LLM reads both the key and the full value, but a descriptive name like <b class="text-amber-400/80">tech_stack</b> or <b class="text-amber-400/80">frameworks_list</b> produces more reliable edits. Rename list-type placeholders manually.</span>
-          </p>
-          <p
-            class="mt-2.5 pt-2 border-t border-gray-700/50 flex gap-2 text-[10px] text-gray-500 leading-relaxed"
-            role="note"
-          >
-            <span
-              class="flex-shrink-0 w-4 h-4 rounded-full border border-gray-600 text-gray-400 flex items-center justify-center text-[9px] font-semibold font-sans"
-              aria-label="Quick label tip"
-            >i</span>
-            <span><b class="text-gray-400">Quick label</b> (top bar toggle, on by default) lets you type a custom name right after marking a selection. Press <b class="text-gray-400">Enter</b> to confirm, or click away to fall back to the auto-generated name. Turn it off to skip the naming step entirely.</span>
-          </p>
-          <p
-            v-if="session.fileFormat === 'tex'"
-            class="mt-2.5 pt-2 border-t border-amber-900/40 flex gap-2 text-[10px] text-amber-700/80 leading-relaxed"
-            role="note"
-          >
-            <span
-              class="flex-shrink-0 w-4 h-4 rounded-full border border-amber-700/60 text-amber-500 flex items-center justify-center text-[9px] font-semibold font-sans"
-              aria-label="LaTeX caution"
-            >!</span>
-            <span><b class="text-amber-500">.tex files:</b> avoid selecting text that starts or ends mid-brace (e.g. selecting only part of <b class="text-amber-400/80">\textbf{word}</b>). Imbalanced <b class="text-amber-400/80">{ }</b> in a placeholder value can break LaTeX compilation. An amber warning appears if a selection looks risky.</span>
-          </p>
-        </div>
-      </div>
-    </div>
+    <div
+      v-else
+      ref="contentEl"
+      class="p-6 pb-16 max-w-3xl mx-auto leading-relaxed cursor-text"
+      v-html="session.renderedHtml"
+    />
 
     <!-- transient toast (error = red, warning = amber) -->
     <div
@@ -513,13 +908,6 @@ const overlappingKey = computed(() => {
           @click="markAs('tailor')"
         >
           Tailor
-        </button>
-        <button
-          v-if="overlappingKey"
-          class="px-2.5 py-1 rounded text-xs font-medium bg-red-600/20 text-red-400 hover:bg-red-600/40 transition-colors"
-          @click="session.removePlaceholder(overlappingKey!); closePopover()"
-        >
-          Clear
         </button>
         <button
           class="flex items-center justify-center text-gray-500 hover:text-blue-400 transition-colors px-1"
@@ -587,6 +975,165 @@ const overlappingKey = computed(() => {
           ✕
         </button>
       </template>
+    </div>
+
+    <!-- hover tooltip over an existing placeholder -->
+    <div
+      v-if="hoverTip"
+      class="absolute z-40 pointer-events-none flex items-center gap-1.5 px-2 py-1 rounded-md bg-gray-900 border border-gray-700 shadow-lg whitespace-nowrap"
+      :style="{
+        left: hoverTip.x + 'px',
+        top: hoverTip.y + 'px',
+        transform: 'translate(-50%, calc(-100% - 6px))',
+      }"
+    >
+      <span
+        class="px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide select-none"
+        :class="hoverTip.type === 'tailor'
+          ? 'bg-blue-600/25 text-blue-300'
+          : 'bg-amber-600/25 text-amber-300'"
+      >{{ hoverTip.type }}</span>
+      <span class="text-[11px] font-mono text-gray-300">{{ hoverTip.key }}</span>
+    </div>
+
+    <!-- right-click menu: delete an existing placeholder -->
+    <div
+      v-if="ctxMenu"
+      ref="ctxMenuEl"
+      class="absolute z-50 bg-gray-800 border border-gray-700 rounded-lg shadow-xl overflow-hidden min-w-[11rem]"
+      :style="{ left: ctxMenu.x + 'px', top: ctxMenu.y + 'px' }"
+    >
+      <div class="flex items-center gap-1.5 px-3 py-1.5 border-b border-gray-700/70">
+        <span
+          class="px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide select-none"
+          :class="ctxMenu.type === 'tailor'
+            ? 'bg-blue-600/25 text-blue-300'
+            : 'bg-amber-600/25 text-amber-300'"
+        >{{ ctxMenu.type }}</span>
+        <span class="text-[11px] font-mono text-gray-300 truncate">{{ ctxMenu.key }}</span>
+      </div>
+      <button
+        class="w-full flex items-center gap-2 px-3 py-1.5 text-left text-xs text-red-400 hover:bg-red-600/20 transition-colors"
+        @click="deletePlaceholderFromMenu"
+      >
+        <span class="text-sm leading-none">✕</span>
+        Delete placeholder
+      </button>
+    </div>
+
+    <!-- resize handles on the hovered (or dragging) placeholder -->
+    <template v-if="resizeHandles && !popover">
+      <div
+        class="ph-resize-handle"
+        :style="handleStyle('start')"
+        title="Drag to change where this placeholder starts"
+        @mousedown="onHandleMouseDown('start', $event)"
+      />
+      <div
+        class="ph-resize-handle"
+        :style="handleStyle('end')"
+        title="Drag to change where this placeholder ends"
+        @mousedown="onHandleMouseDown('end', $event)"
+      />
+    </template>
+    </div>
+
+    <!-- how-to-use sidebar — independent vertical scroll -->
+    <div
+      v-if="session.hasSession"
+      class="w-56 flex-shrink-0 overflow-y-auto border-l border-gray-800 p-4"
+    >
+      <div class="rounded-lg bg-gray-800/50 border border-gray-700/50 p-3">
+        <p class="text-[11px] font-semibold text-gray-400 uppercase tracking-wider mb-2">How to use</p>
+        <ol class="text-[11px] text-gray-500 space-y-1.5 list-decimal list-inside leading-relaxed">
+          <li><span class="text-blue-400">Highlight</span> text to mark as a <b class="text-blue-400">tailor</b> (LLM rewrites) or <b class="text-amber-400">sensitive</b> (local-only) placeholder.</li>
+          <li>Paste the <b class="text-gray-300">job posting</b> in the left panel.</li>
+          <li>Pick model &amp; settings in the top bar.</li>
+          <li><b class="text-gray-400">Faux</b> (top bar): when on, the LLM may add plausible skills or experience that fit your profile and the job; when off, it only rewrites using facts already in your resume and ACC.</li>
+          <li>Hit <b class="text-gray-300">Tailor Resume</b>.</li>
+        </ol>
+        <p
+          class="mt-2.5 pt-2 border-t border-gray-700/50 flex gap-2 text-[10px] text-gray-500 leading-relaxed"
+          role="note"
+        >
+          <span
+            class="flex-shrink-0 w-4 h-4 rounded-full border border-gray-600 text-gray-400 flex items-center justify-center text-[9px] font-semibold font-sans"
+            aria-label="Additional tip"
+          >i</span>
+          <span>In <b class="text-gray-400">Placeholders</b>, click the colored dot to switch between <b class="text-blue-400">tailor</b> and <b class="text-amber-400">sensitive</b>. Click a <b class="text-gray-400">key name</b> to rename it: <b class="text-gray-400">Enter</b> saves, <b class="text-gray-400">Esc</b> or clicking away cancels. Keys are forced to <b class="text-gray-400">lowercase_with_underscores</b>.</span>
+        </p>
+        <p
+          class="mt-2.5 pt-2 border-t border-gray-700/50 flex gap-2 text-[10px] text-gray-500 leading-relaxed"
+          role="note"
+        >
+          <span
+            class="flex-shrink-0 w-4 h-4 rounded-full border border-gray-600 text-gray-400 flex items-center justify-center text-[9px] font-semibold font-sans"
+            aria-label="Jump-to tip"
+          >i</span>
+          <span><b class="text-gray-400">Jump between the two panes:</b> click a <b class="text-gray-400">highlight</b> to scroll its row to the top of <b class="text-gray-400">Placeholders</b>; click a <b class="text-gray-400">placeholder row</b> to scroll the document to its highlight (with a brief <b class="text-green-400">green pulse</b>).</span>
+        </p>
+        <p
+          class="mt-2.5 pt-2 border-t border-gray-700/50 flex gap-2 text-[10px] text-gray-500 leading-relaxed"
+          role="note"
+        >
+          <span
+            class="flex-shrink-0 w-4 h-4 rounded-full border border-gray-600 text-gray-400 flex items-center justify-center text-[9px] font-semibold font-sans"
+            aria-label="Resize handles tip"
+          >i</span>
+          <span><b class="text-gray-400">Adjust a highlight's span:</b> hover it to reveal <b class="text-gray-400">handles</b> at each end, then drag to grow or shrink what the placeholder captures. Dropping a handle onto another placeholder is rejected (it flashes <b class="text-red-400">red</b>).</span>
+        </p>
+        <p
+          class="mt-2.5 pt-2 border-t border-gray-700/50 flex gap-2 text-[10px] text-gray-500 leading-relaxed"
+          role="note"
+        >
+          <span
+            class="flex-shrink-0 w-4 h-4 rounded-full border border-gray-600 text-gray-400 flex items-center justify-center text-[9px] font-semibold font-sans"
+            aria-label="Sensitive value tip"
+          >i</span>
+          <span><b class="text-amber-400">Sensitive</b> rows show your <b class="text-gray-400">highlight</b> above and a <b class="text-gray-400">text field</b> below. That field is the value stitched into the output (not sent to the LLM). It starts as a copy of the highlight. Change it if the resume shows a placeholder, or if you want different wording in the final file.</span>
+        </p>
+        <p
+          class="mt-2.5 pt-2 border-t border-gray-700/50 flex gap-2 text-[10px] text-gray-500 leading-relaxed"
+          role="note"
+        >
+          <span
+            class="flex-shrink-0 w-4 h-4 rounded-full border border-gray-600 text-gray-400 flex items-center justify-center text-[9px] font-semibold font-sans"
+            aria-label="Placeholder naming tip"
+          >i</span>
+          <span><b class="text-gray-400">Auto-naming</b> picks a short key from what you highlighted (simple values like email/phone get obvious names; longer text uses the most salient words). Keys are always <b class="text-gray-400">lowercase</b> with <b class="text-gray-400">underscores only</b>, spaces and hyphens become underscores. <b class="text-gray-400">Rename</b> anytime: in <b class="text-gray-400">Placeholders</b>, click a key name, edit, then press <b class="text-gray-400">Enter</b> to save (<b class="text-gray-400">Esc</b> or clicking away cancels).</span>
+        </p>
+        <p
+          class="mt-2.5 pt-2 border-t border-amber-900/40 flex gap-2 text-[10px] text-amber-700/80 leading-relaxed"
+          role="note"
+        >
+          <span
+            class="flex-shrink-0 w-4 h-4 rounded-full border border-amber-700/60 text-amber-500 flex items-center justify-center text-[9px] font-semibold font-sans"
+            aria-label="Auto-naming caution"
+          >!</span>
+          <span><b class="text-amber-500">Caution with auto-naming:</b> for long lists, the key may name one item rather than the whole (e.g. <b class="text-amber-400/80">vue</b> for a 9-library list). The LLM reads both the key and the full value, but a descriptive name like <b class="text-amber-400/80">tech_stack</b> or <b class="text-amber-400/80">frameworks_list</b> produces more reliable edits. Rename list-type placeholders manually.</span>
+        </p>
+        <p
+          class="mt-2.5 pt-2 border-t border-gray-700/50 flex gap-2 text-[10px] text-gray-500 leading-relaxed"
+          role="note"
+        >
+          <span
+            class="flex-shrink-0 w-4 h-4 rounded-full border border-gray-600 text-gray-400 flex items-center justify-center text-[9px] font-semibold font-sans"
+            aria-label="Quick label tip"
+          >i</span>
+          <span><b class="text-gray-400">Quick label</b> (top bar toggle, on by default) lets you type a custom name right after marking a selection. Press <b class="text-gray-400">Enter</b> to confirm, or click away to fall back to the auto-generated name. Turn it off to skip the naming step entirely.</span>
+        </p>
+        <p
+          v-if="session.fileFormat === 'tex'"
+          class="mt-2.5 pt-2 border-t border-amber-900/40 flex gap-2 text-[10px] text-amber-700/80 leading-relaxed"
+          role="note"
+        >
+          <span
+            class="flex-shrink-0 w-4 h-4 rounded-full border border-amber-700/60 text-amber-500 flex items-center justify-center text-[9px] font-semibold font-sans"
+            aria-label="LaTeX caution"
+          >!</span>
+          <span><b class="text-amber-500">.tex files:</b> avoid selecting text that starts or ends mid-brace (e.g. selecting only part of <b class="text-amber-400/80">\textbf{word}</b>). Imbalanced <b class="text-amber-400/80">{ }</b> in a placeholder value can break LaTeX compilation. An amber warning appears if a selection looks risky.</span>
+        </p>
+      </div>
     </div>
   </div>
 </template>

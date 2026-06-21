@@ -49,33 +49,78 @@
 }
 
 /*
- * Key badges via CSS ::after — NOT as DOM children.
- * This is critical: DOM text nodes inside the element must match
- * the original document text exactly, so the tree walker computes
- * correct character offsets for multi-selection within one element.
+ * Over already-marked text, suppress the highlighter pen cursor — the region
+ * is no longer selectable for marking. Use the hand (pointer) cursor to signal
+ * it's interactive (hover tooltip / right-click menu) without implying it's
+ * still markable. Unlayered rules beat the @layer base cursor regardless of
+ * specificity.
  */
-.placeholder-tailor-inline::after,
-.placeholder-sensitive-inline::after {
-  content: attr(data-ph-key);
-  font-size: 0.6rem;
-  padding: 0 3px;
-  border-radius: 3px;
-  line-height: 1.3;
-  display: inline-block;
-  margin-left: 4px;
-  vertical-align: middle;
-  font-family: monospace;
-  pointer-events: none;
-  user-select: none;
-  -webkit-user-select: none;
+.placeholder-tailor-inline,
+.placeholder-tailor-inline *,
+.placeholder-sensitive-inline,
+.placeholder-sensitive-inline * {
+  cursor: pointer;
 }
-.placeholder-tailor-inline::after {
-  background: rgba(59, 130, 246, 0.25);
-  color: rgb(37, 99, 235);
+
+/*
+ * Resize handles shown (only) while hovering a placeholder. They are
+ * separate absolutely-positioned elements (siblings of the content), not
+ * DOM children of the highlight — so re-rendering the highlight innerHTML
+ * never disturbs them, and the in-element text stays byte-for-byte equal to
+ * the source (the tree walker depends on that for correct char offsets).
+ */
+.ph-resize-handle {
+  position: absolute;
+  width: 11px;                 /* generous hit area; visual bar is centered */
+  transform: translateX(-50%);
+  z-index: 45;
+  cursor: ew-resize;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
-.placeholder-sensitive-inline::after {
-  background: rgba(245, 158, 11, 0.25);
-  color: rgb(180, 83, 9);
+.ph-resize-handle::before {
+  content: '';
+  width: 3px;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--handle-color, rgb(59, 130, 246));
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.3);
+}
+.ph-resize-handle::after {            /* knob for grabbability */
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 9px;
+  height: 9px;
+  border-radius: 9999px;
+  transform: translate(-50%, -50%);
+  background: var(--handle-color, rgb(59, 130, 246));
+  box-shadow: 0 0 0 1.5px rgba(17, 24, 39, 0.9);
+}
+
+/* Red flash to signal a rejected (overlapping) resize. */
+@keyframes phErrorFlash {
+  0%, 100% { background-color: rgba(239, 68, 68, 0); }
+  50%      { background-color: rgba(239, 68, 68, 0.55); }
+}
+.ph-flash-error {
+  animation: phErrorFlash 0.32s ease-in-out 0s 2;
+  outline: 1px solid rgba(239, 68, 68, 0.7);
+  border-radius: 2px;
+}
+
+/* Soft pulse to help locate a highlight after clicking its placeholder row.
+ * Green hue so it stands out against both the blue (tailor) and gold
+ * (sensitive) highlights around it. */
+@keyframes phLocatePulse {
+  0%   { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.7); }
+  100% { box-shadow: 0 0 0 7px rgba(34, 197, 94, 0); }
+}
+.ph-flash-locate {
+  animation: phLocatePulse 0.9s ease-out 0s 1;
+  border-radius: 2px;
 }
 
 /* Tab characters from DOCX tab stops — preserved so Range.toString() returns \t */

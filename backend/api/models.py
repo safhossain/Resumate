@@ -30,6 +30,11 @@ class PlaceholderCreate(BaseModel):
     value: Optional[str] = None
 
 
+class PlaceholderResize(BaseModel):
+    start_offset: int
+    end_offset: int
+
+
 class PlaceholderResponse(BaseModel):
     key: str
     type: str
@@ -84,6 +89,31 @@ class StageDownload(BaseModel):
     tex_url: Optional[str] = None   # set for .tex outputs only
 
 
+class FieldDiff(BaseModel):
+    """A single placeholder whose value changed between two stages."""
+    key: str
+    old: str                 # value on the base side (the "-" lines)
+    new: str                 # value on the compared side (the "+" lines)
+    change_type: str         # "added" | "removed" | "modified"
+
+
+class StageDiff(BaseModel):
+    """Per-stage +/- comparison against the original and the previous stage.
+
+    A "stage" is one rendered snapshot in the chain
+    original → initial → auto_retry → manual_retry(s).
+    The original is never itself a StageDiff; it is only a comparison base.
+    """
+    stage: str               # "initial" | "auto_retry" | "manual_retry"
+    label: str               # human-friendly stage description
+    stage_index: int         # 1-based position among non-original stages
+    vs_original: list[FieldDiff] = []
+    vs_previous: list[FieldDiff] = []
+    # Label describing what "previous" is for this stage (e.g. "Original",
+    # "Initial tailoring") so the UI can clarify the toggle.
+    previous_label: str = "Original"
+
+
 class TailorResponse(BaseModel):
     output_id: str
     preview_html: str
@@ -95,6 +125,7 @@ class TailorResponse(BaseModel):
     changes_log: list[ChangeLogEntry] = []
     render_error: Optional[str] = None
     stage_downloads: list[StageDownload] = []  # per-stage download links
+    stage_diffs: list[StageDiff] = []  # per-stage +/- field comparisons
 
 
 class RetryRequest(BaseModel):

@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { ref, computed, onUnmounted } from 'vue'
+import { ref, computed, onUnmounted, watch } from 'vue'
 import { usePipelineStore } from '../stores/pipeline'
-import type { ChangeLogEntry, StageDownload } from '../api/client'
+import type { ChangeLogEntry, StageDownload, StageDiff, FieldDiff } from '../api/client'
 
 const pipeline = usePipelineStore()
-const activeTab = ref<'output' | 'changes'>('output')
+const activeTab = ref<'output' | 'changes' | 'diff'>('output')
 
 /* ── resizable panel ──────────────────────────────────────────────── */
 const MIN_HEIGHT = 56  // tall enough to show the header row only
@@ -77,6 +77,58 @@ function downloadBadgeClass(stage: StageDownload['stage']): string {
 const stageDownloads = computed<StageDownload[]>(
   () => pipeline.latestOutput?.stage_downloads ?? [],
 )
+
+/* ── diff tab ──────────────────────────────────────────────────────── */
+const stageDiffs = computed<StageDiff[]>(
+  () => pipeline.latestOutput?.stage_diffs ?? [],
+)
+
+// Which stage's diff is shown; defaults to the most recent stage.
+const selectedStageIdx = ref<number | null>(null)
+// What the diff compares against.
+const diffBase = ref<'previous' | 'original'>('previous')
+
+// Reset the selection whenever a new output arrives so we land on its latest stage.
+watch(
+  () => pipeline.latestOutput?.output_id,
+  () => {
+    selectedStageIdx.value = null
+  },
+)
+
+const effectiveStageIdx = computed<number>(() => {
+  const n = stageDiffs.value.length
+  if (n === 0) return 0
+  const sel = selectedStageIdx.value
+  if (sel == null || sel < 0 || sel >= n) return n - 1
+  return sel
+})
+
+const currentStageDiff = computed<StageDiff | null>(
+  () => stageDiffs.value[effectiveStageIdx.value] ?? null,
+)
+
+const currentDiffList = computed<FieldDiff[]>(() => {
+  const sd = currentStageDiff.value
+  if (!sd) return []
+  return diffBase.value === 'original' ? sd.vs_original : sd.vs_previous
+})
+
+// For stage 1 the "previous" IS the original, so the toggle is redundant there.
+const previousIsOriginal = computed<boolean>(
+  () => currentStageDiff.value?.previous_label === 'Original',
+)
+
+function diffStageBadgeClass(stage: StageDiff['stage']): string {
+  if (stage === 'initial') return 'bg-blue-900/40 text-blue-300 border-blue-800/60'
+  if (stage === 'auto_retry') return 'bg-amber-900/40 text-amber-300 border-amber-800/60'
+  return 'bg-purple-900/40 text-purple-300 border-purple-800/60'
+}
+
+function valueLines(value: string): string[] {
+  if (value === '') return []
+  return value.split('\n')
+}
 </script>
 
 <template>
@@ -120,6 +172,16 @@ const stageDownloads = computed<StageDownload[]>(
             @click="activeTab = 'changes'"
           >
             Changes Made
+          </button>
+          <button
+            v-if="stageDiffs.length"
+            class="text-xs font-semibold uppercase tracking-wider px-2.5 py-0.5 rounded transition-colors"
+            :class="activeTab === 'diff'
+              ? 'bg-gray-700 text-gray-200'
+              : 'text-gray-500 hover:text-gray-300'"
+            @click="activeTab = 'diff'"
+          >
+            Diff
           </button>
         </div>
 
@@ -213,8 +275,110 @@ const stageDownloads = computed<StageDownload[]>(
       v-html="pipeline.latestOutput.preview_html"
     />
 
+    <!-- Diff -->
+    <div v-else-if="activeTab === 'diff'" class="p-5 space-y-3">
+      <!-- controls: stage selector + comparison-base toggle -->
+      <div class="flex items-center justify-between gap-3 flex-wrap">
+        <!-- stage selector -->
+        <div class="flex items-center gap-1 flex-wrap">
+          <span class="text-[10px] uppercase tracking-wider text-gray-500 mr-1">Stage</span>
+          <button
+            v-for="(sd, idx) in stageDiffs"
+            :key="idx"
+            class="text-[11px] font-medium px-2 py-0.5 rounded border transition-colors"
+            :class="idx === effectiveStageIdx
+              ? diffStageBadgeClass(sd.stage)
+              : 'border-gray-800 text-gray-500 hover:text-gray-300'"
+            :title="sd.label"
+            @click="selectedStageIdx = idx"
+          >
+            {{ sd.stage_index }}. {{ sd.label }}
+          </button>
+        </div>
+
+        <!-- comparison-base toggle -->
+        <div class="flex items-center gap-1">
+          <button
+            class="text-[11px] font-medium px-2 py-0.5 rounded transition-colors"
+            :class="diffBase === 'previous'
+              ? 'bg-gray-700 text-gray-200'
+              : 'text-gray-500 hover:text-gray-300'"
+            :title="currentStageDiff ? `vs ${currentStageDiff.previous_label}` : 'vs previous stage'"
+            @click="diffBase = 'previous'"
+          >
+            vs Previous
+          </button>
+          <button
+            class="text-[11px] font-medium px-2 py-0.5 rounded transition-colors"
+            :class="diffBase === 'original'
+              ? 'bg-gray-700 text-gray-200'
+              : 'text-gray-500 hover:text-gray-300'"
+            @click="diffBase = 'original'"
+          >
+            vs Original
+          </button>
+        </div>
+      </div>
+
+      <!-- context line explaining the active comparison -->
+      <p class="text-[11px] text-gray-500">
+        <template v-if="diffBase === 'previous'">
+          Comparing <span class="text-gray-300">{{ currentStageDiff?.label }}</span>
+          against <span class="text-gray-300">{{ currentStageDiff?.previous_label }}</span>
+          <span v-if="previousIsOriginal" class="text-gray-600"> (this stage's previous is the original)</span>
+        </template>
+        <template v-else>
+          Comparing <span class="text-gray-300">{{ currentStageDiff?.label }}</span>
+          against <span class="text-gray-300">the original</span>
+        </template>
+      </p>
+
+      <!-- per-placeholder hunks -->
+      <template v-if="currentDiffList.length">
+        <div
+          v-for="fd in currentDiffList"
+          :key="fd.key"
+          class="rounded-lg border border-gray-800 bg-gray-900/60 overflow-hidden"
+        >
+          <div class="flex items-center gap-2 px-3 py-1.5 border-b border-gray-800/60 bg-gray-900/40">
+            <span class="text-[11px] font-mono text-gray-300">{{ fd.key }}</span>
+            <span
+              class="text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded"
+              :class="fd.change_type === 'added'
+                ? 'bg-green-900/40 text-green-300'
+                : fd.change_type === 'removed'
+                  ? 'bg-red-900/40 text-red-300'
+                  : 'bg-gray-700/60 text-gray-300'"
+            >{{ fd.change_type }}</span>
+          </div>
+          <div class="font-mono text-[12px] leading-relaxed">
+            <div
+              v-for="(line, li) in valueLines(fd.old)"
+              :key="'o' + li"
+              class="flex gap-2 px-3 py-0.5 bg-red-950/30 text-red-300 whitespace-pre-wrap break-words"
+            >
+              <span class="select-none text-red-500/70">-</span>
+              <span class="flex-1">{{ line || ' ' }}</span>
+            </div>
+            <div
+              v-for="(line, li) in valueLines(fd.new)"
+              :key="'n' + li"
+              class="flex gap-2 px-3 py-0.5 bg-green-950/30 text-green-300 whitespace-pre-wrap break-words"
+            >
+              <span class="select-none text-green-500/70">+</span>
+              <span class="flex-1">{{ line || ' ' }}</span>
+            </div>
+          </div>
+        </div>
+      </template>
+
+      <p v-else class="text-sm text-gray-500 italic">
+        No placeholder changes for this comparison.
+      </p>
+    </div>
+
     <!-- Changes Made -->
-    <div v-else class="p-5 space-y-2">
+    <div v-else-if="activeTab === 'changes'" class="p-5 space-y-2">
       <!-- multi-stage log -->
       <template v-if="log.length">
         <div

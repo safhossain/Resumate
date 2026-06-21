@@ -11,6 +11,8 @@ import {
   removePlaceholder as apiRemovePh,
   updatePlaceholderType as apiUpdatePhType,
   renamePlaceholder as apiRenamePh,
+  reorderPlaceholders as apiReorderPh,
+  resizePlaceholder as apiResizePh,
   listSessions as apiListSessions,
   getSession as apiGetSession,
   deleteSession as apiDeleteSession,
@@ -34,6 +36,29 @@ export const useSessionStore = defineStore('session', () => {
   const texPdfUrl = ref<string | null>(null)
   const isUploading = ref(false)
   const savedSessions = ref<SessionSummary[]>([])
+
+  /**
+   * Cross-component signal: ask the placeholder list to scroll a given
+   * placeholder into view (top-aligned when possible). A fresh object is
+   * emitted each time so repeat clicks of the same key still trigger.
+   */
+  const scrollRequest = ref<{ key: string; nonce: number } | null>(null)
+  let _scrollNonce = 0
+  function requestScrollToPlaceholder(key: string) {
+    _scrollNonce += 1
+    scrollRequest.value = { key, nonce: _scrollNonce }
+  }
+
+  /**
+   * Reciprocal of `scrollRequest`: ask the document viewer to scroll a given
+   * placeholder's highlight into view (clicked from the placeholder list).
+   */
+  const scrollToHighlight = ref<{ key: string; nonce: number } | null>(null)
+  let _highlightNonce = 0
+  function requestScrollToHighlight(key: string) {
+    _highlightNonce += 1
+    scrollToHighlight.value = { key, nonce: _highlightNonce }
+  }
 
   const hasSession = computed(() => sessionId.value !== null)
   const placeholderList = computed(() => Object.values(placeholders.value))
@@ -105,10 +130,14 @@ export const useSessionStore = defineStore('session', () => {
   async function renamePlaceholder(oldKey: string, newKey: string) {
     if (!sessionId.value || !placeholders.value[oldKey]) return
     const updated = await apiRenamePh(sessionId.value, oldKey, newKey)
-    const copy = { ...placeholders.value }
-    delete copy[oldKey]
-    copy[updated.key] = updated
-    placeholders.value = copy
+    // Rebuild preserving order so the renamed row keeps its position
+    // instead of jumping to the bottom.
+    const rebuilt: Record<string, PlaceholderResponse> = {}
+    for (const [k, v] of Object.entries(placeholders.value)) {
+      if (k === oldKey) rebuilt[updated.key] = updated
+      else rebuilt[k] = v
+    }
+    placeholders.value = rebuilt
   }
 
   async function togglePlaceholderType(key: string) {
@@ -124,6 +153,36 @@ export const useSessionStore = defineStore('session', () => {
     placeholders.value = {
       ...placeholders.value,
       [key]: { ...placeholders.value[key], value },
+    }
+  }
+
+  /**
+   * Move an existing placeholder's start/end boundary. Throws on 409 (overlap)
+   * so the caller can revert + flash; on success the map is updated in place.
+   */
+  async function resizePlaceholder(key: string, start: number, end: number) {
+    if (!sessionId.value || !placeholders.value[key]) return
+    const updated = await apiResizePh(sessionId.value, key, start, end)
+    placeholders.value = { ...placeholders.value, [key]: updated }
+    return updated
+  }
+
+  async function reorderPlaceholders(orderedKeys: string[]) {
+    if (!sessionId.value) return
+    const current = placeholders.value
+    const rebuilt: Record<string, PlaceholderResponse> = {}
+    for (const k of orderedKeys) {
+      if (current[k]) rebuilt[k] = current[k]
+    }
+    // Safety: keep any key not present in the supplied order.
+    for (const k of Object.keys(current)) {
+      if (!(k in rebuilt)) rebuilt[k] = current[k]
+    }
+    placeholders.value = rebuilt // optimistic — list reflects new order immediately
+    try {
+      await apiReorderPh(sessionId.value, Object.keys(rebuilt))
+    } catch {
+      /* keep optimistic order; backend resyncs on next session load */
     }
   }
 
@@ -181,6 +240,12 @@ export const useSessionStore = defineStore('session', () => {
     renamePlaceholder,
     togglePlaceholderType,
     updatePlaceholderValue,
+    reorderPlaceholders,
+    resizePlaceholder,
+    scrollRequest,
+    requestScrollToPlaceholder,
+    scrollToHighlight,
+    requestScrollToHighlight,
     loadSessions,
     loadSession,
     removeSession,

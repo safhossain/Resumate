@@ -104,9 +104,46 @@ def rename_placeholder(session_id: str, old_key: str, new_key: str) -> dict:
         raise KeyError(old_key)
     if new_key in phs:
         raise ValueError(f"Key '{new_key}' already exists")
-    ph = phs.pop(old_key)
-    ph["key"] = new_key
-    phs[new_key] = ph
+    # Rebuild preserving insertion order so a rename keeps its position
+    # (a naive pop + reassign would move the entry to the end).
+    new_phs: dict = {}
+    renamed: dict = {}
+    for k, v in phs.items():
+        if k == old_key:
+            v["key"] = new_key
+            new_phs[new_key] = v
+            renamed = v
+        else:
+            new_phs[k] = v
+    data["placeholders"] = new_phs
+    data["template_generated"] = False
+    _save(session_id, data)
+    return renamed
+
+
+def resize_placeholder(
+    session_id: str,
+    key: str,
+    start_offset: int,
+    end_offset: int,
+    selected_text: str,
+    value: Optional[str] = None,
+) -> dict:
+    """Update an existing placeholder's offsets + captured text in place.
+
+    ``value`` is written only when not ``None`` so callers can choose to
+    leave a custom sensitive value untouched.
+    """
+    data = _load(session_id)
+    phs = data["placeholders"]
+    if key not in phs:
+        raise KeyError(key)
+    ph = phs[key]
+    ph["start_offset"] = start_offset
+    ph["end_offset"] = end_offset
+    ph["selected_text"] = selected_text
+    if value is not None:
+        ph["value"] = value
     data["template_generated"] = False
     _save(session_id, data)
     return ph
@@ -128,6 +165,28 @@ def remove_placeholder(session_id: str, key: str) -> None:
     data["placeholders"].pop(key, None)
     data["template_generated"] = False
     _save(session_id, data)
+
+
+def reorder_placeholders(session_id: str, ordered_keys: list[str]) -> dict:
+    """Rebuild the placeholders dict in *ordered_keys* order.
+
+    Reordering is purely organizational — it does not alter the template
+    (token generation sorts by offset), so ``template_generated`` is left
+    untouched. Any existing key not present in ``ordered_keys`` is appended
+    at the end in its current order as a safety net.
+    """
+    data = _load(session_id)
+    phs = data["placeholders"]
+    new_phs: dict = {}
+    for k in ordered_keys:
+        if k in phs:
+            new_phs[k] = phs[k]
+    for k, v in phs.items():
+        if k not in new_phs:
+            new_phs[k] = v
+    data["placeholders"] = new_phs
+    _save(session_id, data)
+    return new_phs
 
 
 def add_output(session_id: str, output_info: dict) -> None:
