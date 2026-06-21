@@ -104,9 +104,46 @@ def rename_placeholder(session_id: str, old_key: str, new_key: str) -> dict:
         raise KeyError(old_key)
     if new_key in phs:
         raise ValueError(f"Key '{new_key}' already exists")
-    ph = phs.pop(old_key)
-    ph["key"] = new_key
-    phs[new_key] = ph
+    # Rebuild preserving insertion order so a rename keeps its position
+    # (a naive pop + reassign would move the entry to the end).
+    new_phs: dict = {}
+    renamed: dict = {}
+    for k, v in phs.items():
+        if k == old_key:
+            v["key"] = new_key
+            new_phs[new_key] = v
+            renamed = v
+        else:
+            new_phs[k] = v
+    data["placeholders"] = new_phs
+    data["template_generated"] = False
+    _save(session_id, data)
+    return renamed
+
+
+def resize_placeholder(
+    session_id: str,
+    key: str,
+    start_offset: int,
+    end_offset: int,
+    selected_text: str,
+    value: Optional[str] = None,
+) -> dict:
+    """Update an existing placeholder's offsets + captured text in place.
+
+    ``value`` is written only when not ``None`` so callers can choose to
+    leave a custom sensitive value untouched.
+    """
+    data = _load(session_id)
+    phs = data["placeholders"]
+    if key not in phs:
+        raise KeyError(key)
+    ph = phs[key]
+    ph["start_offset"] = start_offset
+    ph["end_offset"] = end_offset
+    ph["selected_text"] = selected_text
+    if value is not None:
+        ph["value"] = value
     data["template_generated"] = False
     _save(session_id, data)
     return ph

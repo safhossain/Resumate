@@ -12,6 +12,7 @@ import {
   updatePlaceholderType as apiUpdatePhType,
   renamePlaceholder as apiRenamePh,
   reorderPlaceholders as apiReorderPh,
+  resizePlaceholder as apiResizePh,
   listSessions as apiListSessions,
   getSession as apiGetSession,
   deleteSession as apiDeleteSession,
@@ -46,6 +47,17 @@ export const useSessionStore = defineStore('session', () => {
   function requestScrollToPlaceholder(key: string) {
     _scrollNonce += 1
     scrollRequest.value = { key, nonce: _scrollNonce }
+  }
+
+  /**
+   * Reciprocal of `scrollRequest`: ask the document viewer to scroll a given
+   * placeholder's highlight into view (clicked from the placeholder list).
+   */
+  const scrollToHighlight = ref<{ key: string; nonce: number } | null>(null)
+  let _highlightNonce = 0
+  function requestScrollToHighlight(key: string) {
+    _highlightNonce += 1
+    scrollToHighlight.value = { key, nonce: _highlightNonce }
   }
 
   const hasSession = computed(() => sessionId.value !== null)
@@ -118,10 +130,14 @@ export const useSessionStore = defineStore('session', () => {
   async function renamePlaceholder(oldKey: string, newKey: string) {
     if (!sessionId.value || !placeholders.value[oldKey]) return
     const updated = await apiRenamePh(sessionId.value, oldKey, newKey)
-    const copy = { ...placeholders.value }
-    delete copy[oldKey]
-    copy[updated.key] = updated
-    placeholders.value = copy
+    // Rebuild preserving order so the renamed row keeps its position
+    // instead of jumping to the bottom.
+    const rebuilt: Record<string, PlaceholderResponse> = {}
+    for (const [k, v] of Object.entries(placeholders.value)) {
+      if (k === oldKey) rebuilt[updated.key] = updated
+      else rebuilt[k] = v
+    }
+    placeholders.value = rebuilt
   }
 
   async function togglePlaceholderType(key: string) {
@@ -138,6 +154,17 @@ export const useSessionStore = defineStore('session', () => {
       ...placeholders.value,
       [key]: { ...placeholders.value[key], value },
     }
+  }
+
+  /**
+   * Move an existing placeholder's start/end boundary. Throws on 409 (overlap)
+   * so the caller can revert + flash; on success the map is updated in place.
+   */
+  async function resizePlaceholder(key: string, start: number, end: number) {
+    if (!sessionId.value || !placeholders.value[key]) return
+    const updated = await apiResizePh(sessionId.value, key, start, end)
+    placeholders.value = { ...placeholders.value, [key]: updated }
+    return updated
   }
 
   async function reorderPlaceholders(orderedKeys: string[]) {
@@ -214,8 +241,11 @@ export const useSessionStore = defineStore('session', () => {
     togglePlaceholderType,
     updatePlaceholderValue,
     reorderPlaceholders,
+    resizePlaceholder,
     scrollRequest,
     requestScrollToPlaceholder,
+    scrollToHighlight,
+    requestScrollToHighlight,
     loadSessions,
     loadSession,
     removeSession,

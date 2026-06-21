@@ -184,6 +184,22 @@ export function renamePlaceholder(
   )
 }
 
+export function resizePlaceholder(
+  sessionId: string,
+  key: string,
+  startOffset: number,
+  endOffset: number,
+): Promise<PlaceholderResponse> {
+  return request(
+    `/placeholder/${sessionId}/${encodeURIComponent(key)}/resize`,
+    {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ start_offset: startOffset, end_offset: endOffset }),
+    },
+  )
+}
+
 export function reorderPlaceholders(
   sessionId: string,
   orderedKeys: string[],

@@ -5,7 +5,7 @@ import re
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from ..models import PlaceholderCreate, PlaceholderResponse
+from ..models import PlaceholderCreate, PlaceholderResize, PlaceholderResponse
 from .. import session_store
 
 router = APIRouter()
@@ -211,6 +211,80 @@ async def reorder_placeholders(session_id: str, body: PlaceholderReorderRequest)
 
     session_store.reorder_placeholders(session_id, incoming)
     return {"ok": True}
+
+
+@router.patch("/placeholder/{session_id}/{key}/resize", response_model=PlaceholderResponse)
+async def resize_placeholder(session_id: str, key: str, body: PlaceholderResize):
+    """Move a placeholder's start/end boundary to a new pair of offsets.
+
+    Rejects (409) when the new range overlaps a *different* placeholder — this
+    is what backs the drag-handle "drop onto another placeholder" failure.
+    """
+    try:
+        session = session_store.get_session(session_id)
+    except FileNotFoundError:
+        raise HTTPException(404, "Session not found")
+
+    phs = session["placeholders"]
+    if key not in phs:
+        raise HTTPException(404, f"Placeholder '{key}' not found")
+
+    raw_text = session.get("raw_text", "")
+    start, end = body.start_offset, body.end_offset
+    if start < 0 or end > len(raw_text):
+        raise HTTPException(400, "Offsets out of range")
+    if start >= end:
+        raise HTTPException(400, "Empty selection")
+
+    for other_key, other in phs.items():
+        if other_key == key:
+            continue
+        if _ranges_overlap(start, end, other["start_offset"], other["end_offset"]):
+            raise HTTPException(
+                409,
+                f"Selection overlaps with existing placeholder '{other['key']}'",
+            )
+
+    new_text = raw_text[start:end]
+
+    # Keep `value` tracking the highlight when it was an unedited copy of the
+    # old captured text; preserve a genuinely customized value otherwise.
+    current = phs[key]
+    cur_val = current.get("value")
+    new_val = new_text if (cur_val is not None and cur_val == current.get("selected_text")) else None
+
+    tex_warning: str | None = None
+    if session.get("file_format") == "tex":
+        balance = _brace_balance(new_text)
+        if balance > 0:
+            tex_warning = (
+                f"Selection has {balance} unclosed '{{' — this may cause LaTeX rendering errors. "
+                "Consider adjusting your selection to exclude the opening brace(s)."
+            )
+        elif balance < 0:
+            tex_warning = (
+                f"Selection has {-balance} extra '}}' — this may cause LaTeX rendering errors. "
+                "Consider adjusting your selection to exclude the trailing brace(s)."
+            )
+
+    ph = session_store.resize_placeholder(
+        session_id=session_id,
+        key=key,
+        start_offset=start,
+        end_offset=end,
+        selected_text=new_text,
+        value=new_val,
+    )
+
+    return PlaceholderResponse(
+        key=ph["key"],
+        type=ph["type"],
+        selected_text=ph["selected_text"],
+        start_offset=ph["start_offset"],
+        end_offset=ph["end_offset"],
+        value=ph.get("value"),
+        warning=tex_warning,
+    )
 
 
 @router.patch("/placeholder/{session_id}/{key}/rename")

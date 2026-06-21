@@ -30,6 +30,11 @@ class PlaceholderCreate(BaseModel):
     value: Optional[str] = None
 
 
+class PlaceholderResize(BaseModel):
+    start_offset: int
+    end_offset: int
+
+
 class PlaceholderResponse(BaseModel):
     key: str
     type: str
