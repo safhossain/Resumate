@@ -4,14 +4,10 @@ from typing import Dict, Optional
 from pathlib import Path
 import docx2txt
 import shutil
-import time
 
-from .file_type_base import FileType, build_output_tag
+from .file_type_base import FileType
 from .context_helpers import escape_chars
-
-# Sentinel value the LLM may place in a placeholder to signal that the entire
-# paragraph / bullet point containing that placeholder should be removed.
-REMOVE_SENTINEL = "REMOVE_BULLETPOINT"
+from ..constants import REMOVE_SENTINEL
 
 
 def _remove_sentinel_paragraphs(docx_path: Path) -> int:
@@ -55,11 +51,7 @@ class DOCXf(FileType):
         self.context = escape_chars(context, "docx")
 
         orig = self.res_path
-        timestamp = (metadata or {}).get("timestamp") or int(time.time())
-        suffix    = (metadata or {}).get("suffix", "")
-        tag = build_output_tag(metadata)
-        new_name = f"{orig.stem}{tag}_{timestamp}{suffix}{orig.suffix}"
-        working_copy = self.dest_dir / new_name
+        working_copy = self._build_output_path(metadata)
         shutil.copy2(orig, working_copy)
 
         doc = DocxTemplate(working_copy)

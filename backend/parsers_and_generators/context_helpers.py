@@ -1,4 +1,4 @@
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Callable, Optional
 import re
 
 ''' 
@@ -9,6 +9,23 @@ NOTE: Everything in this file is LLM-generated becuase I don't know regex or esc
 # Presence of this in a value means the value is already LaTeX source and
 # must not be run through escape_latex (escaping would mangle \href, \textbf, etc.)
 _LATEX_CTRL_RE = re.compile(r'\\[a-zA-Z]')
+
+
+def _deep_map(value: Any, transform: Callable[[str], str]) -> Any:
+    """Recursively apply *transform* to every ``str`` inside *value*.
+
+    Walks dicts, lists, and tuples; leaves non-string scalars (ints, None,
+    RichText objects, etc.) untouched.
+    """
+    if isinstance(value, str):
+        return transform(value)
+    if isinstance(value, dict):
+        return {k: _deep_map(v, transform) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_deep_map(v, transform) for v in value]
+    if isinstance(value, tuple):
+        return tuple(_deep_map(v, transform) for v in value)
+    return value
 
 def resolve_placeholders(ctx: Dict[str, Optional[str]], max_passes=5):
     # Note: LLM-generated
@@ -33,50 +50,34 @@ def resolve_placeholders(ctx: Dict[str, Optional[str]], max_passes=5):
     return ctx
 
 # latex escaping .....................................................
-def escape_latex(ctx: Any,
-                   _LATEX_ESC: Dict[str, str] = {
-                       '\\': r'\textbackslash{}',
-                       '&':  r'\&',
-                       '%':  r'\%',
-                       '$':  r'\$',
-                       '#':  r'\#',
-                       '_':  r'\_',
-                       '{':  r'\{',
-                       '}':  r'\}',
-                       '~':  r'\textasciitilde{}',
-                       '^':  r'\^{}',
-                   },
-                   _LATEX_ESC_RE: re.Pattern = re.compile(
-                       '(' + '|'.join(re.escape(c) for c in [
-                           '\\', '&', '%', '$', '#', '_', '{', '}', '~', '^'
-                       ]) + ')'
-                   ))->Any:
-    # Note: LLM-generated
-    """
-    Recursively walk ctx (which might be a dict, list, tuple or scalar).
-    Any str gets latex-escaped; others are kept unchanged.
-    """
-    # 1) If this is a string, do a single-pass escape —
-    #    but skip values that already contain LaTeX control sequences (e.g. \href,
-    #    \textbf), because those values ARE LaTeX source and must not be mangled.
-    if isinstance(ctx, str):
-        if _LATEX_CTRL_RE.search(ctx):
-            return ctx
-        return _LATEX_ESC_RE.sub(lambda m: _LATEX_ESC[m.group(1)], ctx)
+_LATEX_ESC: Dict[str, str] = {
+    '\\': r'\textbackslash{}',
+    '&':  r'\&',
+    '%':  r'\%',
+    '$':  r'\$',
+    '#':  r'\#',
+    '_':  r'\_',
+    '{':  r'\{',
+    '}':  r'\}',
+    '~':  r'\textasciitilde{}',
+    '^':  r'\^{}',
+}
+_LATEX_ESC_RE = re.compile(
+    '(' + '|'.join(re.escape(c) for c in ['\\', '&', '%', '$', '#', '_', '{', '}', '~', '^']) + ')'
+)
 
-    # 2) If it's a dict, recurse on each value
-    if isinstance(ctx, dict):
-        return {k: escape_latex(v, _LATEX_ESC, _LATEX_ESC_RE)
-                for k, v in ctx.items()}
 
-    # 3) If it's a list or tuple, recurse in order
-    if isinstance(ctx, list):
-        return [escape_latex(v, _LATEX_ESC, _LATEX_ESC_RE) for v in ctx]
-    if isinstance(ctx, tuple):
-        return tuple(escape_latex(v, _LATEX_ESC, _LATEX_ESC_RE) for v in ctx)
+def _escape_latex_str(s: str) -> str:
+    # Skip values that already contain LaTeX control sequences (e.g. \href,
+    # \textbf) — those values ARE LaTeX source and must not be mangled.
+    if _LATEX_CTRL_RE.search(s):
+        return s
+    return _LATEX_ESC_RE.sub(lambda m: _LATEX_ESC[m.group(1)], s)
 
-    # 4) Otherwise leave it alone (ints, None, etc.)
-    return ctx
+
+def escape_latex(ctx: Any) -> Any:
+    """Recursively latex-escape every string in *ctx* (dict/list/tuple/scalar)."""
+    return _deep_map(ctx, _escape_latex_str)
 
 # xml escaping .....................................................
 _XML_ESC: Dict[str, str] = {
@@ -88,30 +89,16 @@ _XML_ESC_RE = re.compile(
     '(' + '|'.join(re.escape(c) for c in _XML_ESC) + ')'
 )
 
-def escape_xml(ctx: Dict[str, str])-> Dict[str, str]:
-    """
-    Recursively escape XML special characters (& < > \" ') in strings within ctx.
-    Supports dicts, lists, tuples, and scalar values.
-    """
-    # 1) If this is a string, do a single-pass XML escape
-    if isinstance(ctx, str):
-        return _XML_ESC_RE.sub(lambda m: _XML_ESC[m.group(1)], ctx)
 
-    # 2) If it's a dict, recurse on each value
-    if isinstance(ctx, dict):
-        return {k: escape_xml(v) for k, v in ctx.items()}
+def _escape_xml_str(s: str) -> str:
+    return _XML_ESC_RE.sub(lambda m: _XML_ESC[m.group(1)], s)
 
-    # 3) If it's a list or tuple, recurse in order
-    if isinstance(ctx, list):
-        return [escape_xml(v) for v in ctx]
-    if isinstance(ctx, tuple):
-        return tuple(escape_xml(v) for v in ctx)
 
-    # 4) Otherwise leave it alone (ints, None, RichText objects, etc.)
-    return ctx
+def escape_xml(ctx: Dict[str, str]) -> Dict[str, str]:
+    """Recursively XML-escape (& < >) every string in *ctx*."""
+    return _deep_map(ctx, _escape_xml_str)
 
 def escape_chars(ctx: Dict[str, str], format:str)-> Dict[str, str]:
-    print(format)  
     if format.endswith("tex") or format.endswith("tex.j2"):        
         return escape_latex(ctx)
     elif format.endswith("docx") or format.endswith("doc"):      

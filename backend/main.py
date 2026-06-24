@@ -7,17 +7,18 @@ import sys
 import tempfile
 import time
 
+from backend.constants import REMOVE_SENTINEL, TEMPLATE_MAP
 from backend.llm_integration.AI_API.api_scripts.contracts import LLM_I, MOD_DEG, LLM_O
-from backend.llm_integration.LLM_CALL import (
-    CALL, CALL_RAW,
-    CALL_RETRY, CALL_RETRY2,
-    CALL_RETRY_TEX, CALL_RETRY2_TEX,
-    MODELS, DEFAULT_MODEL,
+from backend.llm_integration.LLM_CALL import CALL, CALL_RAW, MODELS, DEFAULT_MODEL
+from backend.pipeline import (
+    PAGE_LIMIT_HANDLERS,
+    analyze_for,
+    build_context,
+    build_run_meta,
+    first_retry_fn,
+    page_info_for,
+    second_retry_fn,
 )
-from backend.parsers_and_generators.page_count_docx import get_docx_page_info, analyze_mbps_from_docx
-from backend.parsers_and_generators.page_info import get_pdf_page_info
-from backend.parsers_and_generators.visual_lines import analyze_mbps
-from backend.parsers_and_generators.context_helpers import resolve_placeholders
 
 from backend.parsers_and_generators.file_type_base import FileType
 from backend.parsers_and_generators.file_type_txt_j2 import TXTf
@@ -82,14 +83,6 @@ HANDLERS: dict[tuple[str, ...], type[FileType]] = {
     (".pdf",):       PDFf,
 }
 
-TEMPLATE_MAP = {
-    "doc": "BASE_TEMPLATE.docx",
-    "tex": "BASE_TEMPLATE_2.tex.j2",
-    "txt": "BASE_TEMPLATE.txt.j2",
-    "pdf": "BASE_RESUME_TEMPL.pdf", #actually, we don't support pdf yet. placeholder for future support.
-}
-
-
 def _print_placeholder_summary(placeholders: dict, label: str = "Placeholder char counts") -> None:
     """Print a concise table of placeholder lengths, sorted descending."""
     sorted_items = sorted(placeholders.items(), key=lambda kv: len(kv[1]), reverse=True)
@@ -98,7 +91,7 @@ def _print_placeholder_summary(placeholders: dict, label: str = "Placeholder cha
     print(f"  {'KEY':<{width}}  LEN")
     print(f"  {'-'*width}  ---")
     for k, v in sorted_items:
-        marker = "  ← REMOVE_BULLETPOINT" if v.strip() == "REMOVE_BULLETPOINT" else ""
+        marker = f"  ← {REMOVE_SENTINEL}" if v.strip() == REMOVE_SENTINEL else ""
         print(f"  {k:<{width}}  {len(v):>4}{marker}")
     print(f"  {'-'*width}  ---")
     print(f"  {'TOTAL':<{width}}  {total:>4}  ({len(placeholders)} placeholders)")
@@ -145,10 +138,7 @@ def main(
     # Merge sensitive fields + LLM-modified placeholders, then resolve
     # recursive {{ PLACEHOLDER }} references before passing to Jinja2
     def _build_context(placeholder_values: dict) -> Dict[str, str]:
-        ctx: Dict[str, str | None] = dict(sensitive_fields)
-        ctx.update(placeholder_values)
-        ctx = resolve_placeholders(ctx)
-        return {k: v for k, v in ctx.items() if v is not None}
+        return build_context(placeholder_values, sensitive_fields)
 
     payload: LLM_I = {
         "full_resume": FULL_RESUME_STR,
@@ -172,7 +162,7 @@ def main(
 
             # Pre-render with original placeholders to establish baseline metrics
             baseline_fields = None
-            if pages is not None and Handler in (DOCXf, J2f):
+            if pages is not None and Handler in PAGE_LIMIT_HANDLERS:
                 print("--- Pre-render baseline (original placeholders) ---")
                 pre_context = _build_context(fields)
                 tmp_dir = Path(tempfile.mkdtemp(prefix="resumate_prerender_"))
@@ -181,11 +171,7 @@ def main(
                     pre_meta = {"timestamp": int(time.time()), "suffix": "_prerender"}
                     pre_output = pre_ft.post_llm_process(pre_context, metadata=pre_meta)
 
-                    is_tex = (Handler is J2f)
-                    if is_tex:
-                        pre_info = get_pdf_page_info(pre_output)
-                    else:
-                        pre_info = get_docx_page_info(pre_output)
+                    pre_info = page_info_for(Handler, pre_output)
 
                     if pre_info:
                         pre_pages = pre_info["page_count"]
@@ -202,7 +188,7 @@ def main(
 
             # Page-target + baseline char budgets apply only to docx/tex (--pages pipeline).
             # TXT uses the same CALL path but should not get PAGE TARGET or baseline metrics in the system prompt.
-            page_hint_for_llm = pages if Handler in (DOCXf, J2f) else None
+            page_hint_for_llm = pages if Handler in PAGE_LIMIT_HANDLERS else None
             llm_response: LLM_O = CALL(
                 payload, model=model, page_hint=page_hint_for_llm,
                 baseline_fields=baseline_fields,
@@ -218,27 +204,24 @@ def main(
         print("(no LLM call — using original placeholders)")
 
     run_timestamp = int(time.time())
-    run_metadata = {
-        "model":     model,
-        "posting":   str(posting_path),
-        "moddeg":    mod_deg.value,
-        "faux":      faux,
-        "timestamp": run_timestamp,
-    }
+    run_metadata = build_run_meta(
+        model=model,
+        posting=str(posting_path),
+        mod_deg_value=mod_deg.value,
+        faux=faux,
+        timestamp=run_timestamp,
+    )
 
     clean_context = _build_context(mod_fields)
     output_path = ft.post_llm_process(clean_context, metadata=run_metadata)
 
     # Page-limit check (docx and tex; docx requires LibreOffice on PATH)
-    if pages is not None and Handler in (DOCXf, J2f) and opcode != 1:
+    if pages is not None and Handler in PAGE_LIMIT_HANDLERS and opcode != 1:
         is_tex = (Handler is J2f)
         fmt_label = "LaTeX/PDF" if is_tex else "DOCX"
 
         # J2f output is already a PDF; DOCXf needs LibreOffice → PDF conversion
-        if is_tex:
-            page_info = get_pdf_page_info(output_path)
-        else:
-            page_info = get_docx_page_info(output_path)
+        page_info = page_info_for(Handler, output_path)
 
         if page_info is None:
             print("Page check: skipped (see warnings above).")
@@ -253,10 +236,7 @@ def main(
                 print(f"Page check ({fmt_label}): {actual_pages} page(s), last page {fill_display} filled — exceeds target ({pages}). Retrying with LLM...")
 
                 print("  Running MBP analysis on initial render...")
-                if is_tex:
-                    mbp_analysis = analyze_mbps(output_path, mod_fields)
-                else:
-                    mbp_analysis = analyze_mbps_from_docx(output_path, mod_fields)
+                mbp_analysis = analyze_for(Handler, output_path, mod_fields)
 
                 if mbp_analysis is not None:
                     _ma = mbp_analysis
@@ -292,24 +272,14 @@ def main(
                 _print_placeholder_summary(mod_fields)
                 print()
 
-                if is_tex:
-                    llm_retry: LLM_O = CALL_RETRY_TEX(
-                        retry_payload,
-                        actual_pages=actual_pages,
-                        target_pages=pages,
-                        last_page_fill_pct=fill_pct,
-                        mbp_analysis=mbp_analysis,
-                        model=model,
-                    )
-                else:
-                    llm_retry = CALL_RETRY(
-                        retry_payload,
-                        actual_pages=actual_pages,
-                        target_pages=pages,
-                        last_page_fill_pct=fill_pct,
-                        mbp_analysis=mbp_analysis,
-                        model=model,
-                    )
+                llm_retry: LLM_O = first_retry_fn(Handler)(
+                    retry_payload,
+                    actual_pages=actual_pages,
+                    target_pages=pages,
+                    last_page_fill_pct=fill_pct,
+                    mbp_analysis=mbp_analysis,
+                    model=model,
+                )
 
                 retry_fields = llm_retry["placeholders"]
                 print("--- Retry LLM Response ---")
@@ -325,10 +295,7 @@ def main(
                     metadata={**run_metadata, "suffix": "_retry"},
                 )
 
-                if is_tex:
-                    retry_info = get_pdf_page_info(retry_output_path)
-                else:
-                    retry_info = get_docx_page_info(retry_output_path)
+                retry_info = page_info_for(Handler, retry_output_path)
 
                 if retry_info is None:
                     print("Page check after retry: skipped (see warnings above).")
@@ -345,10 +312,7 @@ def main(
                         )
 
                         print("  Running MBP analysis on retry output...")
-                        if is_tex:
-                            retry_mbp_analysis = analyze_mbps(retry_output_path, retry_fields)
-                        else:
-                            retry_mbp_analysis = analyze_mbps_from_docx(retry_output_path, retry_fields)
+                        retry_mbp_analysis = analyze_for(Handler, retry_output_path, retry_fields)
 
                         if retry_mbp_analysis is not None:
                             _rma = retry_mbp_analysis
@@ -409,24 +373,14 @@ def main(
                             _print_placeholder_summary(retry_fields)
                             print()
 
-                            if is_tex:
-                                llm_retry2: LLM_O = CALL_RETRY2_TEX(
-                                    second_retry_payload,
-                                    actual_pages=retry_pages,
-                                    target_pages=pages,
-                                    last_page_fill_pct=retry_fill_pct,
-                                    mbp_analysis=retry_mbp_analysis,
-                                    model=model,
-                                )
-                            else:
-                                llm_retry2 = CALL_RETRY2(
-                                    second_retry_payload,
-                                    actual_pages=retry_pages,
-                                    target_pages=pages,
-                                    last_page_fill_pct=retry_fill_pct,
-                                    mbp_analysis=retry_mbp_analysis,
-                                    model=model,
-                                )
+                            llm_retry2: LLM_O = second_retry_fn(Handler)(
+                                second_retry_payload,
+                                actual_pages=retry_pages,
+                                target_pages=pages,
+                                last_page_fill_pct=retry_fill_pct,
+                                mbp_analysis=retry_mbp_analysis,
+                                model=model,
+                            )
 
                             retry2_fields = llm_retry2["placeholders"]
                             print("--- Second retry LLM response ---")
@@ -442,10 +396,7 @@ def main(
                                 metadata={**run_metadata, "suffix": "_retry2"},
                             )
 
-                            if is_tex:
-                                retry2_info = get_pdf_page_info(retry2_output_path)
-                            else:
-                                retry2_info = get_docx_page_info(retry2_output_path)
+                            retry2_info = page_info_for(Handler, retry2_output_path)
 
                             if retry2_info is None:
                                 print("Page check after second retry: skipped (see warnings above).")

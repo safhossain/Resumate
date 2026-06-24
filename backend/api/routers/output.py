@@ -1,27 +1,14 @@
 from __future__ import annotations
 
-import html as html_mod
 from pathlib import Path
 
-import mammoth
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 
 from .. import session_store
+from ..preview import render_preview_html
 
 router = APIRouter()
-
-
-def _preview_html(output_path: Path, fmt: str) -> str:
-    if fmt == "docx":
-        with open(output_path, "rb") as fh:
-            result = mammoth.convert_to_html(fh)
-        return result.value
-    if fmt == "txt":
-        with open(output_path, "r", encoding="utf-8") as fh:
-            text = fh.read()
-        return f'<pre style="white-space:pre-wrap;">{html_mod.escape(text)}</pre>'
-    return '<p>PDF output — use download.</p>'
 
 
 def _get_output_or_404(session_id: str, output_id: str) -> dict:
@@ -46,7 +33,7 @@ async def preview_output(session_id: str, output_id: str):
     fmt = session["file_format"]
     if fmt == "tex":
         return FileResponse(output_path, media_type="application/pdf")
-    return {"preview_html": _preview_html(output_path, fmt)}
+    return {"preview_html": render_preview_html(output_path, fmt)}
 
 
 @router.get("/output/{session_id}/{output_id}/download")

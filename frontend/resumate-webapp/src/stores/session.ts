@@ -25,6 +25,26 @@ export function sanitizeKey(raw: string): string {
   return s || 'field'
 }
 
+/**
+ * Rebuild a record in the order given by *orderedKeys*. Any key present in
+ * *source* but missing from *orderedKeys* is appended at the end (safety), so
+ * the result never silently drops entries. Used for both reordering and
+ * order-preserving renames (mirrors the backend's two rebuild helpers).
+ */
+export function rebuildPreservingOrder<T>(
+  source: Record<string, T>,
+  orderedKeys: string[],
+): Record<string, T> {
+  const rebuilt: Record<string, T> = {}
+  for (const k of orderedKeys) {
+    if (k in source) rebuilt[k] = source[k]
+  }
+  for (const k of Object.keys(source)) {
+    if (!(k in rebuilt)) rebuilt[k] = source[k]
+  }
+  return rebuilt
+}
+
 export const useSessionStore = defineStore('session', () => {
   const sessionId = ref<string | null>(null)
   const fileFormat = ref<string>('')
@@ -132,12 +152,12 @@ export const useSessionStore = defineStore('session', () => {
     const updated = await apiRenamePh(sessionId.value, oldKey, newKey)
     // Rebuild preserving order so the renamed row keeps its position
     // instead of jumping to the bottom.
-    const rebuilt: Record<string, PlaceholderResponse> = {}
-    for (const [k, v] of Object.entries(placeholders.value)) {
-      if (k === oldKey) rebuilt[updated.key] = updated
-      else rebuilt[k] = v
-    }
-    placeholders.value = rebuilt
+    const renamedMap = { ...placeholders.value, [updated.key]: updated }
+    delete renamedMap[oldKey]
+    const orderedKeys = Object.keys(placeholders.value).map((k) =>
+      k === oldKey ? updated.key : k,
+    )
+    placeholders.value = rebuildPreservingOrder(renamedMap, orderedKeys)
   }
 
   async function togglePlaceholderType(key: string) {
@@ -169,15 +189,7 @@ export const useSessionStore = defineStore('session', () => {
 
   async function reorderPlaceholders(orderedKeys: string[]) {
     if (!sessionId.value) return
-    const current = placeholders.value
-    const rebuilt: Record<string, PlaceholderResponse> = {}
-    for (const k of orderedKeys) {
-      if (current[k]) rebuilt[k] = current[k]
-    }
-    // Safety: keep any key not present in the supplied order.
-    for (const k of Object.keys(current)) {
-      if (!(k in rebuilt)) rebuilt[k] = current[k]
-    }
+    const rebuilt = rebuildPreservingOrder(placeholders.value, orderedKeys)
     placeholders.value = rebuilt // optimistic — list reflects new order immediately
     try {
       await apiReorderPh(sessionId.value, Object.keys(rebuilt))

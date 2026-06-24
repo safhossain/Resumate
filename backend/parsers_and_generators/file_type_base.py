@@ -2,6 +2,7 @@ from typing import Union, Optional, Dict
 from abc import ABC, abstractmethod
 from pathlib import Path
 from os import PathLike
+import time
 
 
 def build_output_tag(metadata: Optional[dict]) -> str:
@@ -35,6 +36,36 @@ class FileType(ABC):
             print(f"destination folder dne: {e}")
         else:
             pass
+
+    def _build_output_path(self, metadata: Optional[dict], *, strip_last_suffix: bool = False) -> Path:
+        """Compute the destination path for a rendered output.
+
+        Produces ``<base><tag>_<timestamp><suffix><ext>`` under ``dest_dir``,
+        where ``tag`` is the ``_model_posting_moddeg_faux`` segment, ``timestamp``
+        and ``suffix`` come from *metadata* (shared across a run's retries), and
+        ``ext`` is the template's full multi-suffix (e.g. ``.tex.j2``).
+
+        ``strip_last_suffix=True`` drops the trailing template extension (e.g.
+        ``.j2``) so a ``.tex.j2`` template yields a ``.tex`` working file.
+        """
+        orig = self.res_path
+        meta = metadata or {}
+        timestamp = meta.get("timestamp") or int(time.time())
+        suffix = meta.get("suffix") or ""
+        tag = build_output_tag(metadata)
+
+        all_suffixes = "".join(orig.suffixes)
+        if all_suffixes:
+            base_name = orig.name[: -len(all_suffixes)]
+            ext = all_suffixes
+        else:
+            base_name = orig.stem
+            ext = orig.suffix
+
+        name = f"{base_name}{tag}_{timestamp}{suffix}{ext}"
+        if strip_last_suffix:
+            name = Path(name).stem
+        return self.dest_dir / name
 
     @abstractmethod
     def get_resume_str(self) -> str: ...

@@ -4,12 +4,21 @@ All provider calls are delegated to the AI_API library.
 
 from .AI_API.api_scripts.contracts import LLM_I, LLM_O, get_mod_deg_str, get_LLM_I_str, get_LLM_O_str
 from .AI_API.api_scripts.api_gateway import ask_json, ask, MODELS
+from .mod_deg_examples import MOD_DEG_GUIDE_SECTION
 from backend.loading_spinner import with_loading
 
 if len(MODELS) > 0:
     DEFAULT_MODEL: str = list(MODELS)[0]    
 else:
     raise ValueError("MODELS contains no models. Check MODELS dict.")
+
+
+def _resolve_model(model: str | None) -> str:
+    """Return *model* (or the default) after validating it against MODELS."""
+    selected = model or DEFAULT_MODEL
+    if selected not in MODELS:
+        raise ValueError(f"Unknown model: {selected!r}. Available: {list(MODELS)}")
+    return selected
 
 # JSON schema for the structured response
 # Built dynamically so that Claude/OpenAI strict-schema validators get an
@@ -56,6 +65,7 @@ OUTPUT
 MODIFICATION DEGREE (mod_deg)
 ------------------------------------------------------------
 {get_mod_deg_str()}
+{MOD_DEG_GUIDE_SECTION}
 
 ------------------------------------------------------------
 FAUX MODE (faux)
@@ -294,14 +304,21 @@ def _format_mbp_analysis(mbp_analysis=None) -> str:
 
 
 # ---------------------------------------------------------------------------
-# DOCX retry prompts
+# Retry prompts (shared between DOCX and LaTeX via format slots)
 # ---------------------------------------------------------------------------
+
+# LaTeX-only addendum inserted into retry prompts via the {format_note} slot.
+_NO_LATEX_CMDS_NOTE = """
+    NO LATEX COMMANDS IN VALUES:
+    - Do NOT include \\vspace, \\setlength, \\renewcommand, or any other LaTeX commands
+      in placeholder values. Return plain text content only.
+"""
 
 _RETRY_PAGE_SECTION = """
 ------------------------------------------------------------
-PAGE CONSTRAINT RETRY  (mod_deg={mod_deg}, faux={faux})
+PAGE CONSTRAINT RETRY{title_suffix}  (mod_deg={mod_deg}, faux={faux})
 ------------------------------------------------------------
-    The rendered output was {actual_pages} page(s) — last page approximately {fill_pct_display}%
+    The rendered {output_noun} was {actual_pages} page(s) — last page approximately {fill_pct_display}%
     filled — but the target is {target_pages} page(s).
 
 {mbp_block}
@@ -320,7 +337,7 @@ PAGE CONSTRAINT RETRY  (mod_deg={mod_deg}, faux={faux})
     2. If Tier A alone is not enough (see LINE BUDGET), do the same for Tier B targets.
 
     3. REMOVE_BULLETPOINT: set any standalone bullet/paragraph placeholder value to exactly
-       the string REMOVE_BULLETPOINT to physically delete it from the output.
+       the string REMOVE_BULLETPOINT to {remove_clause}
        Use this for items NOT directly relevant to the job posting.
        Do NOT use it for core identity fields (name, summary, contact info, headings).
        A REMOVE_BULLETPOINT on a 2-line element saves 2 lines; on a 1-line saves 1 line.
@@ -329,7 +346,7 @@ PAGE CONSTRAINT RETRY  (mod_deg={mod_deg}, faux={faux})
 
     CONTENT REMOVAL IS ENCOURAGED when mod_deg is medium or higher — do not keep
     off-topic bullets just to fill space. Prefer REMOVE_BULLETPOINT over filler.
-""" + _DO_NOT_MODIFY_SECTION + """
+{format_note}""" + _DO_NOT_MODIFY_SECTION + """
     HARD RULES:
     - Return every key. Core identity fields must have real, non-empty values.
     - Do not invent facts (unless faux=true permits it as above).
@@ -339,9 +356,9 @@ PAGE CONSTRAINT RETRY  (mod_deg={mod_deg}, faux={faux})
 
 _SECOND_RETRY_SECTION = """
 ------------------------------------------------------------
-SECOND RETRY — MBP TARGETED REPHRASING  (mod_deg={mod_deg}, faux={faux})
+SECOND RETRY — MBP TARGETED REPHRASING{title_suffix}  (mod_deg={mod_deg}, faux={faux})
 ------------------------------------------------------------
-    After the first retry, the output is still {actual_pages} page(s) with the last page
+    After the first retry, {output_clause} {actual_pages} page(s) with the last page
     {fill_pct_display}% filled (target: {target_pages} page(s)).
 
 {mbp_block}
@@ -360,7 +377,7 @@ SECOND RETRY — MBP TARGETED REPHRASING  (mod_deg={mod_deg}, faux={faux})
 
     If the LINE BUDGET says rephrasing is not enough, you MUST use REMOVE_BULLETPOINT
     on the least important bullets/paragraphs until the budget is met.
-""" + _DO_NOT_MODIFY_SECTION + """
+{format_note}""" + _DO_NOT_MODIFY_SECTION + """
     HARD RULES:
     - Return every key. Core identity fields must have real, non-empty values.
     - Do not invent facts (unless faux=true permits it).
@@ -368,8 +385,38 @@ SECOND RETRY — MBP TARGETED REPHRASING  (mod_deg={mod_deg}, faux={faux})
 """
 
 
+# Per-format slot values for the retry templates above.
+_FIRST_RETRY_SLOTS = {
+    False: {  # DOCX
+        "title_suffix": "",
+        "output_noun": "output",
+        "remove_clause": "physically delete it from the output.",
+        "format_note": "",
+    },
+    True: {   # LaTeX
+        "title_suffix": " — LaTeX",
+        "output_noun": "PDF",
+        "remove_clause": "physically delete that \\resumeItem from the .tex.",
+        "format_note": _NO_LATEX_CMDS_NOTE,
+    },
+}
+
+_SECOND_RETRY_SLOTS = {
+    False: {  # DOCX
+        "title_suffix": "",
+        "output_clause": "the output is still",
+        "format_note": "",
+    },
+    True: {   # LaTeX
+        "title_suffix": ", LaTeX",
+        "output_clause": "the rendered PDF is still",
+        "format_note": _NO_LATEX_CMDS_NOTE,
+    },
+}
+
+
 # ---------------------------------------------------------------------------
-# Public call interface — DOCX
+# Public call interface
 # ---------------------------------------------------------------------------
 
 def _format_baseline_metrics(original_fields: dict | None) -> str:
@@ -404,9 +451,7 @@ def CALL(
     pre-render to help the LLM stay within page bounds on the first try.
     file_format: if "tex", appends LaTeX-specific rules to prevent brace corruption.
     """
-    selected = model or DEFAULT_MODEL
-    if selected not in MODELS:
-        raise ValueError(f"Unknown model: {selected!r}. Available: {list(MODELS)}")
+    selected = _resolve_model(model)
     schema = build_response_schema(payload["placeholders"])
     system = SYSTEM_PROMPT
     if file_format == "tex":
@@ -417,6 +462,40 @@ def CALL(
         system = system + _format_baseline_metrics(baseline_fields)
     return ask_json(selected, str(payload), schema, system=system)
 
+def _call_retry(
+    payload: LLM_I,
+    *,
+    section: str,
+    slots: dict,
+    is_tex: bool,
+    actual_pages: int,
+    target_pages: int,
+    last_page_fill_pct: float,
+    mbp_analysis,
+    model: str | None,
+) -> LLM_O:
+    """Shared body for the page-constraint retry calls (DOCX + LaTeX).
+
+    *section* is the retry template; *slots* supplies the per-format text slots;
+    *is_tex* prepends the LaTeX addendum to the system prompt.
+    """
+    selected = _resolve_model(model)
+    schema = build_response_schema(payload["placeholders"])
+    mod_deg = payload.get("mod_deg")
+    mod_deg_val = mod_deg.value if hasattr(mod_deg, "value") else str(mod_deg)
+    mbp_block = _format_mbp_analysis(mbp_analysis)
+    system = SYSTEM_PROMPT + (_TEX_ADDENDUM if is_tex else "") + section.format(
+        actual_pages=actual_pages,
+        target_pages=target_pages,
+        mod_deg=mod_deg_val,
+        faux=payload.get("faux", False),
+        fill_pct_display=round(last_page_fill_pct * 100),
+        mbp_block=mbp_block,
+        **slots,
+    )
+    return ask_json(selected, str(payload), schema, system=system)
+
+
 @with_loading("Calling LLM Retry 1")
 def CALL_RETRY(
     payload: LLM_I,
@@ -426,27 +505,17 @@ def CALL_RETRY(
     mbp_analysis=None,
     model: str | None = None,
 ) -> LLM_O:
-    """Second LLM call issued when the rendered output exceeded the page target.
+    """DOCX first retry — issued when the rendered output exceeded the page target.
 
     *payload* should contain the LLM-modified placeholders from the first call
     (not the originals) so the model can see what it already produced and trim from there.
     """
-    selected = model or DEFAULT_MODEL
-    if selected not in MODELS:
-        raise ValueError(f"Unknown model: {selected!r}. Available: {list(MODELS)}")
-    schema = build_response_schema(payload["placeholders"])
-    mod_deg = payload.get("mod_deg")
-    mod_deg_val = mod_deg.value if hasattr(mod_deg, "value") else str(mod_deg)
-    mbp_block = _format_mbp_analysis(mbp_analysis)
-    retry_system = SYSTEM_PROMPT + _RETRY_PAGE_SECTION.format(
-        actual_pages=actual_pages,
-        target_pages=target_pages,
-        mod_deg=mod_deg_val,
-        faux=payload.get("faux", False),
-        fill_pct_display=round(last_page_fill_pct * 100),
-        mbp_block=mbp_block,
+    return _call_retry(
+        payload, section=_RETRY_PAGE_SECTION, slots=_FIRST_RETRY_SLOTS[False],
+        is_tex=False, actual_pages=actual_pages, target_pages=target_pages,
+        last_page_fill_pct=last_page_fill_pct, mbp_analysis=mbp_analysis, model=model,
     )
-    return ask_json(selected, str(payload), schema, system=retry_system)
+
 
 @with_loading("Calling LLM Retry 2")
 def CALL_RETRY2(
@@ -457,32 +526,55 @@ def CALL_RETRY2(
     mbp_analysis=None,
     model: str | None = None,
 ) -> LLM_O:
-    """Third LLM call (user-prompted) — targets MBP rephrasing for 1-line savings
+    """DOCX second retry (user-prompted) — MBP rephrasing for 1-line savings
     before falling back to content removal.
 
     *payload* should contain the placeholders from the first retry so the model
     sees the current state and can apply targeted MBP rephrasing.
     """
-    selected = model or DEFAULT_MODEL
-    if selected not in MODELS:
-        raise ValueError(f"Unknown model: {selected!r}. Available: {list(MODELS)}")
-    schema = build_response_schema(payload["placeholders"])
-    mod_deg = payload.get("mod_deg")
-    mod_deg_val = mod_deg.value if hasattr(mod_deg, "value") else str(mod_deg)
-    mbp_block = _format_mbp_analysis(mbp_analysis)
-    second_retry_system = SYSTEM_PROMPT + _SECOND_RETRY_SECTION.format(
-        actual_pages=actual_pages,
-        target_pages=target_pages,
-        mod_deg=mod_deg_val,
-        faux=payload.get("faux", False),
-        fill_pct_display=round(last_page_fill_pct * 100),
-        mbp_block=mbp_block,
+    return _call_retry(
+        payload, section=_SECOND_RETRY_SECTION, slots=_SECOND_RETRY_SLOTS[False],
+        is_tex=False, actual_pages=actual_pages, target_pages=target_pages,
+        last_page_fill_pct=last_page_fill_pct, mbp_analysis=mbp_analysis, model=model,
     )
-    return ask_json(selected, str(payload), schema, system=second_retry_system)
+
+
+@with_loading("Calling LLM Retry 1")
+def CALL_RETRY_TEX(
+    payload: LLM_I,
+    actual_pages: int,
+    target_pages: int,
+    last_page_fill_pct: float,
+    mbp_analysis=None,
+    model: str | None = None,
+) -> LLM_O:
+    """LaTeX first retry — content reduction only."""
+    return _call_retry(
+        payload, section=_RETRY_PAGE_SECTION, slots=_FIRST_RETRY_SLOTS[True],
+        is_tex=True, actual_pages=actual_pages, target_pages=target_pages,
+        last_page_fill_pct=last_page_fill_pct, mbp_analysis=mbp_analysis, model=model,
+    )
+
+
+@with_loading("Calling LLM Retry 2")
+def CALL_RETRY2_TEX(
+    payload: LLM_I,
+    actual_pages: int,
+    target_pages: int,
+    last_page_fill_pct: float,
+    mbp_analysis=None,
+    model: str | None = None,
+) -> LLM_O:
+    """LaTeX second retry — MBP targeted rephrasing."""
+    return _call_retry(
+        payload, section=_SECOND_RETRY_SECTION, slots=_SECOND_RETRY_SLOTS[True],
+        is_tex=True, actual_pages=actual_pages, target_pages=target_pages,
+        last_page_fill_pct=last_page_fill_pct, mbp_analysis=mbp_analysis, model=model,
+    )
 
 
 # ---------------------------------------------------------------------------
-# LaTeX-specific addendum and prompts
+# LaTeX-specific addendum (prepended to the system prompt for .tex outputs)
 # ---------------------------------------------------------------------------
 
 _TEX_ADDENDUM = """
@@ -510,145 +602,6 @@ LaTeX SOURCE FILE  (this resume is in .tex format)
       unless the original value already used them.
 """
 
-_RETRY_PAGE_SECTION_TEX = """
-------------------------------------------------------------
-PAGE CONSTRAINT RETRY — LaTeX  (mod_deg={mod_deg}, faux={faux})
-------------------------------------------------------------
-    The rendered PDF was {actual_pages} page(s) — last page approximately {fill_pct_display}%
-    filled — but the target is {target_pages} page(s).
-
-{mbp_block}
-    STRATEGY — SAVE RENDERED LINES (apply in this order):
-
-    1. For each Tier A target listed above:
-       - Look at the "OVERFLOW WORDS" — these are the exact words that push the element
-         onto an extra rendered line.
-       - Rewrite the ENTIRE value so it fits within the "1-line capacity" char limit.
-         That means the whole value, not just the end. Tighten throughout: use shorter
-         synonyms, drop filler words, merge clauses.
-       - If trimming to fit is impossible, set the value to REMOVE_BULLETPOINT.
-       - ⚠ Trimming a few words while the value is STILL over the 1-line capacity
-         saves ZERO visual lines. You must reach the limit or it changes nothing.
-
-    2. If Tier A alone is not enough (see LINE BUDGET), do the same for Tier B targets.
-
-    3. REMOVE_BULLETPOINT: set any standalone bullet/paragraph placeholder value to exactly
-       the string REMOVE_BULLETPOINT to physically delete that \\resumeItem from the .tex.
-       Use this for items NOT directly relevant to the job posting.
-       Do NOT use it for core identity fields (name, summary, contact info, headings).
-       A REMOVE_BULLETPOINT on a 2-line element saves 2 lines; on a 1-line saves 1 line.
-
-    4. Last resort: condense verbose sentences, merge closely related elements.
-
-    CONTENT REMOVAL IS ENCOURAGED when mod_deg is medium or higher — do not keep
-    off-topic bullets just to fill space. Prefer REMOVE_BULLETPOINT over filler.
-
-    NO LATEX COMMANDS IN VALUES:
-    - Do NOT include \\vspace, \\setlength, \\renewcommand, or any other LaTeX commands
-      in placeholder values. Return plain text content only.
-""" + _DO_NOT_MODIFY_SECTION + """
-    HARD RULES:
-    - Return every key. Core identity fields must have real, non-empty values.
-    - Do not invent facts (unless faux=true permits it as above).
-    - Do not truncate mid-sentence. If a bullet is kept, it must be a complete thought.
-"""
-
-
-_SECOND_RETRY_SECTION_TEX = """
-------------------------------------------------------------
-SECOND RETRY — MBP TARGETED REPHRASING, LaTeX  (mod_deg={mod_deg}, faux={faux})
-------------------------------------------------------------
-    After the first retry, the rendered PDF is still {actual_pages} page(s) with the last page
-    {fill_pct_display}% filled (target: {target_pages} page(s)).
-
-{mbp_block}
-    INSTRUCTIONS (follow EXACTLY):
-
-    For each Tier A and Tier B target above:
-    1. Read the "OVERFLOW WORDS" — those are the exact rendered words causing the extra line.
-    2. Read the "1-line capacity" — that is the MAXIMUM char count for the value to fit on
-       one rendered line.
-    3. Rewrite the ENTIRE VALUE to be ≤ that char limit. Not just the end — tighten the
-       whole sentence. Use shorter words, cut qualifiers, merge clauses.
-    4. Count the chars of your new value. If it is STILL over the limit, shorten further
-       or set the value to REMOVE_BULLETPOINT.
-    5. ⚠ ANY value that stays over the 1-line capacity will still wrap to 2 lines,
-       saving ZERO space. Partial shortening is USELESS.
-
-    If the LINE BUDGET says rephrasing is not enough, you MUST use REMOVE_BULLETPOINT
-    on the least important bullets/paragraphs until the budget is met.
-
-    NO LATEX COMMANDS IN VALUES:
-    - Do NOT include \\vspace, \\setlength, \\renewcommand, or any other LaTeX commands
-      in placeholder values. Return plain text content only.
-""" + _DO_NOT_MODIFY_SECTION + """
-    HARD RULES:
-    - Return every key. Core identity fields must have real, non-empty values.
-    - Do not invent facts (unless faux=true permits it).
-    - Do not truncate mid-sentence. If a bullet is kept, it must be a complete thought.
-"""
-
-
-# ---------------------------------------------------------------------------
-# Public call interface — LaTeX
-# ---------------------------------------------------------------------------
-@with_loading("Calling LLM Retry 1")
-def CALL_RETRY_TEX(
-    payload: LLM_I,
-    actual_pages: int,
-    target_pages: int,
-    last_page_fill_pct: float,
-    mbp_analysis=None,
-    model: str | None = None,
-) -> LLM_O:
-    """LaTeX retry — content reduction only."""
-    selected = model or DEFAULT_MODEL
-    if selected not in MODELS:
-        raise ValueError(f"Unknown model: {selected!r}. Available: {list(MODELS)}")
-
-    schema = build_response_schema(payload["placeholders"])
-    mod_deg = payload.get("mod_deg")
-    mod_deg_val = mod_deg.value if hasattr(mod_deg, "value") else str(mod_deg)
-    mbp_block = _format_mbp_analysis(mbp_analysis)
-
-    retry_system = SYSTEM_PROMPT + _TEX_ADDENDUM + _RETRY_PAGE_SECTION_TEX.format(
-        actual_pages=actual_pages,
-        target_pages=target_pages,
-        mod_deg=mod_deg_val,
-        faux=payload.get("faux", False),
-        fill_pct_display=round(last_page_fill_pct * 100),
-        mbp_block=mbp_block,
-    )
-    return ask_json(selected, str(payload), schema, system=retry_system)
-
-@with_loading("Calling LLM Retry 2")
-def CALL_RETRY2_TEX(
-    payload: LLM_I,
-    actual_pages: int,
-    target_pages: int,
-    last_page_fill_pct: float,
-    mbp_analysis=None,
-    model: str | None = None,
-) -> LLM_O:
-    """LaTeX third call — MBP targeted rephrasing."""
-    selected = model or DEFAULT_MODEL
-    if selected not in MODELS:
-        raise ValueError(f"Unknown model: {selected!r}. Available: {list(MODELS)}")
-
-    schema = build_response_schema(payload["placeholders"])
-    mod_deg = payload.get("mod_deg")
-    mod_deg_val = mod_deg.value if hasattr(mod_deg, "value") else str(mod_deg)
-    mbp_block = _format_mbp_analysis(mbp_analysis)
-    second_retry_system = SYSTEM_PROMPT + _TEX_ADDENDUM + _SECOND_RETRY_SECTION_TEX.format(
-        actual_pages=actual_pages,
-        target_pages=target_pages,
-        mod_deg=mod_deg_val,
-        faux=payload.get("faux", False),
-        fill_pct_display=round(last_page_fill_pct * 100),
-        mbp_block=mbp_block,
-    )
-    return ask_json(selected, str(payload), schema, system=second_retry_system)
-
 
 # ---------------------------------------------------------------------------
 # Debug / raw
@@ -656,7 +609,5 @@ def CALL_RETRY2_TEX(
 @with_loading("Calling LLM RAW")
 def CALL_RAW(payload: LLM_I, model: str | None = None) -> str:
     #Call the LLM in plain-text mode.  Returns the raw response string (debug)
-    selected = model or DEFAULT_MODEL
-    if selected not in MODELS:
-        raise ValueError(f"Unknown model: {selected!r}. Available: {list(MODELS)}")
+    selected = _resolve_model(model)
     return ask(selected, str(payload), system=SYSTEM_PROMPT)

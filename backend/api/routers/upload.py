@@ -66,10 +66,14 @@ def _process_docx(file_path: Path) -> tuple[str, list[dict], str]:
     return "\n".join(html_parts), structure, raw_text
 
 
-# ── TXT processing ─────────────────────────────────────────────────
+# ── line-based processing (TXT + TEX) ──────────────────────────────
 
 
-def _process_txt(file_path: Path) -> tuple[str, list[dict], str]:
+def _process_lines(file_path: Path, extra_class: str = "") -> tuple[str, list[dict], str]:
+    """Render a plain-text/line-based file to per-line offset-tagged divs.
+
+    *extra_class* appends an extra CSS class to each line div (e.g. ``tex-line``).
+    """
     with open(file_path, "r", encoding="utf-8") as f:
         content = f.read()
 
@@ -77,13 +81,14 @@ def _process_txt(file_path: Path) -> tuple[str, list[dict], str]:
     structure: list[dict] = []
     html_parts: list[str] = []
     offset = 0
+    cls = "resume-element resume-line" + (f" {extra_class}" if extra_class else "")
 
     for i, line_text in enumerate(lines):
         inner = _text_to_inner_html(line_text)
         elem_id = f"line_{i}"
         html_parts.append(
             f'<div data-element-id="{elem_id}" data-offset="{offset}"'
-            f' class="resume-element resume-line">{inner}</div>'
+            f' class="{cls}">{inner}</div>'
         )
         structure.append(
             {"id": elem_id, "type": "line", "text": line_text, "offset": offset}
@@ -93,31 +98,12 @@ def _process_txt(file_path: Path) -> tuple[str, list[dict], str]:
     return "\n".join(html_parts), structure, content
 
 
-# ── TEX processing ─────────────────────────────────────────────────
+def _process_txt(file_path: Path) -> tuple[str, list[dict], str]:
+    return _process_lines(file_path)
 
 
 def _process_tex(file_path: Path) -> tuple[str, list[dict], str, str | None]:
-    with open(file_path, "r", encoding="utf-8") as f:
-        content = f.read()
-
-    lines = content.split("\n")
-    structure: list[dict] = []
-    html_parts: list[str] = []
-    offset = 0
-
-    for i, line_text in enumerate(lines):
-        inner = _text_to_inner_html(line_text)
-        elem_id = f"line_{i}"
-        html_parts.append(
-            f'<div data-element-id="{elem_id}" data-offset="{offset}"'
-            f' class="resume-element resume-line tex-line">{inner}</div>'
-        )
-        structure.append(
-            {"id": elem_id, "type": "line", "text": line_text, "offset": offset}
-        )
-        offset += len(line_text) + 1
-
-    rendered_html = "\n".join(html_parts)
+    rendered_html, structure, content = _process_lines(file_path, extra_class="tex-line")
 
     tex_pdf_url: str | None = None
     try:

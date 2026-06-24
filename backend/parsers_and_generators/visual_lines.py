@@ -19,6 +19,8 @@ from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 from pathlib import Path
 
+from ..constants import REMOVE_SENTINEL
+
 _BULLET_CHARS = set("•●▪›◦⁃–-")
 _BULLET_RE = re.compile(
     r'^[\s\u2022\u2023\u25e6\u2043\u2219\u25cf\u25aa\u25ab\-\*\•●▪›◦⁃]+\s'
@@ -370,7 +372,7 @@ def analyze_mbps(
         for key, value in mod_fields.items():
             if key in used_keys:
                 continue
-            if isinstance(value, str) and value.strip() == "REMOVE_BULLETPOINT":
+            if isinstance(value, str) and value.strip() == REMOVE_SENTINEL:
                 continue
             ratio = SequenceMatcher(None, clean, _norm(str(value))).ratio()
             if ratio > best_ratio:

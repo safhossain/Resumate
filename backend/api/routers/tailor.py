@@ -11,30 +11,26 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-import mammoth
 from fastapi import APIRouter, HTTPException
 
+from backend.constants import REMOVE_SENTINEL
 from backend.llm_integration.AI_API.api_scripts.contracts import LLM_I, MOD_DEG
-from backend.llm_integration.LLM_CALL import (
-    CALL,
-    CALL_RETRY,
-    CALL_RETRY_TEX,
-    CALL_RETRY2,
-    CALL_RETRY2_TEX,
-    DEFAULT_MODEL,
-    MODELS,
+from backend.llm_integration.LLM_CALL import CALL, DEFAULT_MODEL, MODELS
+from backend.pipeline import (
+    PAGE_LIMIT_HANDLERS,
+    analyze_for,
+    build_context,
+    build_run_meta,
+    first_retry_fn,
+    page_info_for,
+    second_retry_fn,
 )
-from backend.parsers_and_generators.context_helpers import resolve_placeholders
+from backend.parsers_and_generators.brace_utils import brace_balance
 from backend.parsers_and_generators.file_type_docx import DOCXf
 from backend.parsers_and_generators.file_type_tex_j2 import J2f
 from backend.parsers_and_generators.file_type_txt_j2 import TXTf
-from backend.parsers_and_generators.page_count_docx import (
-    analyze_mbps_from_docx,
-    get_docx_page_info,
-)
-from backend.parsers_and_generators.page_info import get_pdf_page_info
-from backend.parsers_and_generators.visual_lines import analyze_mbps
 
+from ..preview import render_preview_html
 from ..models import (
     ChangeLogEntry,
     FieldDiff,
@@ -58,17 +54,6 @@ _MOD_DEG_MAP = {m.value: m for m in MOD_DEG}
 # ── helpers ─────────────────────────────────────────────────────────
 
 
-def _tex_brace_balance(s: str) -> int:
-    """Net brace depth of *s* (positive = unclosed '{', negative = extra '}')."""
-    depth = 0
-    for ch in s:
-        if ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-    return depth
-
-
 def _normalize_tex_values(mod_fields: dict, original_fields: dict) -> dict:
     """For .tex files: strip trailing '}' from LLM-returned values when the LLM
     closed more braces than the original selected text had.
@@ -82,20 +67,13 @@ def _normalize_tex_values(mod_fields: dict, original_fields: dict) -> dict:
     result = {}
     for key, returned in mod_fields.items():
         original = original_fields.get(key, "")
-        orig_bal = _tex_brace_balance(original)
+        orig_bal = brace_balance(original)
         ret_val = returned
         # Strip trailing `}` while returned balance is more negative than original
-        while _tex_brace_balance(ret_val) < orig_bal and ret_val and ret_val[-1] == "}":
+        while brace_balance(ret_val) < orig_bal and ret_val and ret_val[-1] == "}":
             ret_val = ret_val[:-1]
         result[key] = ret_val
     return result
-
-
-def _build_context(mod_fields: dict, sensitive_fields: dict) -> dict[str, str]:
-    ctx: dict[str, str | None] = dict(sensitive_fields)
-    ctx.update(mod_fields)
-    ctx = resolve_placeholders(ctx)
-    return {k: v for k, v in ctx.items() if v is not None}
 
 
 # ── diff helpers ────────────────────────────────────────────────────
@@ -104,9 +82,6 @@ def _build_context(mod_fields: dict, sensitive_fields: dict) -> dict[str, str]:
 # read-only — so diffs are computed per placeholder key. Each changed key
 # yields a git-style hunk: the base value as the "-" side and the compared
 # value as the "+" side.
-
-_REMOVE_SENTINEL = "REMOVE_BULLETPOINT"
-
 
 def _diff_fields(base: dict, new: dict) -> list[FieldDiff]:
     """Return one FieldDiff per placeholder key whose value changed."""
@@ -119,7 +94,7 @@ def _diff_fields(base: dict, new: dict) -> list[FieldDiff]:
             continue
         if not old_val.strip():
             change_type = "added"
-        elif not new_val.strip() or new_val.strip() == _REMOVE_SENTINEL:
+        elif not new_val.strip() or new_val.strip() == REMOVE_SENTINEL:
             change_type = "removed"
         else:
             change_type = "modified"
@@ -181,21 +156,8 @@ def _split_placeholder_dicts(placeholders: dict) -> tuple[dict, dict]:
     return fields, sensitive
 
 
-def _generate_preview(output_path: Path, file_format: str) -> str:
-    if file_format == "docx":
-        with open(output_path, "rb") as fh:
-            result = mammoth.convert_to_html(fh)
-        return result.value
-    if file_format == "txt":
-        with open(output_path, "r", encoding="utf-8") as fh:
-            text = fh.read()
-        return f'<pre style="white-space:pre-wrap;">{html_mod.escape(text)}</pre>'
-    return '<p class="text-gray-400">PDF generated — use the download button.</p>'
-
-
 def _check_pages(output_path: Path, fmt: str) -> Optional[dict]:
-    is_tex = fmt == "tex"
-    pi = get_pdf_page_info(output_path) if is_tex else get_docx_page_info(output_path)
+    pi = page_info_for(_handler_class(fmt), output_path)
     if pi is None:
         return None
     return {"page_count": pi["page_count"], "last_page_fill_pct": pi["last_page_fill_pct"]}
@@ -369,9 +331,9 @@ async def tailor(req: TailorRequest):
 
     baseline_fields: dict | None = None
     page_hint: int | None = None
-    if req.pages and handler_cls in (DOCXf, J2f):
+    if req.pages and handler_cls in PAGE_LIMIT_HANDLERS:
         page_hint = req.pages
-        pre_ctx = _build_context(fields, sensitive_fields)
+        pre_ctx = build_context(fields, sensitive_fields)
         tmp_dir = Path(tempfile.mkdtemp(prefix="resumate_pre_"))
         try:
             pre_ft = handler_cls(template_path, tmp_dir)
@@ -403,15 +365,12 @@ async def tailor(req: TailorRequest):
 
     run_ts = int(time.time())
     output_id = uuid.uuid4().hex[:8]
-    run_meta = {
-        "model": model,
-        "posting": "web",
-        "moddeg": mod_deg.value,
-        "faux": req.faux,
-        "timestamp": run_ts,
-    }
+    run_meta = build_run_meta(
+        model=model, posting="web", mod_deg_value=mod_deg.value,
+        faux=req.faux, timestamp=run_ts,
+    )
 
-    clean_ctx = _build_context(mod_fields, sensitive_fields)
+    clean_ctx = build_context(mod_fields, sensitive_fields)
     render_error: str | None = None
     try:
         output_path = handler.post_llm_process(clean_ctx, metadata=run_meta)
@@ -494,8 +453,7 @@ async def tailor(req: TailorRequest):
     # Preserve initial output path before any auto-retry overwrites it.
     initial_output_path: Path | None = output_path
 
-    if req.pages and handler_cls in (DOCXf, J2f):
-        is_tex = handler_cls is J2f
+    if req.pages and handler_cls in PAGE_LIMIT_HANDLERS:
         pi = _check_pages(output_path, fmt)
 
         if pi:
@@ -508,13 +466,9 @@ async def tailor(req: TailorRequest):
             )
 
             if not within:
-                mbp = (
-                    analyze_mbps(output_path, mod_fields)
-                    if is_tex
-                    else analyze_mbps_from_docx(output_path, mod_fields)
-                )
+                mbp = analyze_for(handler_cls, output_path, mod_fields)
                 retry_payload: LLM_I = {**payload, "placeholders": mod_fields}
-                retry_fn = CALL_RETRY_TEX if is_tex else CALL_RETRY
+                retry_fn = first_retry_fn(handler_cls)
                 retry_resp = retry_fn(
                     retry_payload,
                     actual_pages=pi["page_count"],
@@ -528,7 +482,7 @@ async def tailor(req: TailorRequest):
                     mod_fields = _normalize_tex_values(mod_fields, fields)
                 retry_changes = retry_resp.get("changes_made", "")
                 changes_made = retry_changes or changes_made
-                clean_ctx = _build_context(mod_fields, sensitive_fields)
+                clean_ctx = build_context(mod_fields, sensitive_fields)
 
                 handler2 = _handler_for(fmt, template_path, out_dir)
                 output_path = handler2.post_llm_process(
@@ -568,7 +522,7 @@ async def tailor(req: TailorRequest):
                     }
                 )
 
-    preview_html = _generate_preview(output_path, fmt)
+    preview_html = render_preview_html(output_path, fmt)
 
     # Build per-stage download metadata.
     is_tex_fmt = fmt == "tex"
@@ -666,11 +620,7 @@ async def retry(req: RetryRequest):
     is_tex = fmt == "tex"
 
     prev_path = Path(prev_output["file_path"])
-    mbp = (
-        analyze_mbps(prev_path, prev_mod_fields)
-        if is_tex
-        else analyze_mbps_from_docx(prev_path, prev_mod_fields)
-    )
+    mbp = analyze_for(_handler_class(fmt), prev_path, prev_mod_fields)
 
     prev_pi = prev_output.get("page_info") or {}
     actual = prev_pi.get("page_count", 2)
@@ -685,7 +635,7 @@ async def retry(req: RetryRequest):
         "acc": acc,
     }
 
-    retry_fn = CALL_RETRY2_TEX if is_tex else CALL_RETRY2
+    retry_fn = second_retry_fn(_handler_class(fmt))
     llm_resp = retry_fn(
         payload,
         actual_pages=actual,
@@ -721,15 +671,14 @@ async def retry(req: RetryRequest):
     run_ts = int(time.time())
     output_id = uuid.uuid4().hex[:8]
     run_meta = {
-        "model": model,
-        "posting": "web",
-        "moddeg": mod_deg.value,
-        "faux": faux,
-        "timestamp": run_ts,
+        **build_run_meta(
+            model=model, posting="web", mod_deg_value=mod_deg.value,
+            faux=faux, timestamp=run_ts,
+        ),
         "suffix": f"_retry{retry_number}",
     }
 
-    clean_ctx = _build_context(new_mod, sensitive_fields)
+    clean_ctx = build_context(new_mod, sensitive_fields)
     handler2 = _handler_for(fmt, template_path, out_dir)
     output_path = handler2.post_llm_process(clean_ctx, metadata=run_meta)
 
@@ -767,7 +716,7 @@ async def retry(req: RetryRequest):
         }
     )
 
-    preview_html = _generate_preview(output_path, fmt)
+    preview_html = render_preview_html(output_path, fmt)
 
     is_tex_fmt = fmt == "tex"
     stage_downloads: list[StageDownload] = [

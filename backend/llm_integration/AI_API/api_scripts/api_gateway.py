@@ -22,6 +22,16 @@ MODELS: dict[str, dict] = {
     "xai/grok-3":            {"provider": "xai",      "model_id": "grok-3"},
 }
 
+
+def _build_messages(system: Optional[str], prompt: str) -> list[dict]:
+    """Build the standard chat messages list (optional system + user prompt)."""
+    messages: list[dict] = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": prompt})
+    return messages
+
+
 def _claude_ask(model_id: str, prompt: str, system: Optional[str]) -> str:
     client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
     kwargs: dict = {
@@ -60,10 +70,7 @@ def _openai_ask(
 ) -> str:
 
     client = OpenAI(api_key=api_key, base_url=base_url)
-    messages = []
-    if system:
-        messages.append({"role": "system", "content": system})
-    messages.append({"role": "user", "content": prompt})
+    messages = _build_messages(system, prompt)
     resp = client.chat.completions.create(model=model_id, messages=messages)
     return resp.choices[0].message.content or ""
 
@@ -77,10 +84,7 @@ def _openai_ask_json(
 ) -> LLM_O:
     
     client = OpenAI(api_key=api_key, base_url=base_url)
-    messages = []
-    if system:
-        messages.append({"role": "system", "content": system})
-    messages.append({"role": "user", "content": prompt})
+    messages = _build_messages(system, prompt)
     resp = client.chat.completions.create(
         model=model_id,
         messages=messages,
@@ -121,10 +125,7 @@ def _deepseek_ask(model_id: str, prompt: str, system: Optional[str]) -> str:
     from openai import OpenAI
 
     client = OpenAI(api_key=os.environ["DEEPSEEK_API_KEY"], base_url="https://api.deepseek.com")
-    messages = []
-    if system:
-        messages.append({"role": "system", "content": system})
-    messages.append({"role": "user", "content": prompt})
+    messages = _build_messages(system, prompt)
     resp = client.chat.completions.create(model=model_id, messages=messages)
     return resp.choices[0].message.content or ""
 
@@ -137,6 +138,7 @@ def _deepseek_ask_json(model_id: str, prompt: str, schema: dict, system: Optiona
         f"Return valid JSON that strictly conforms to this schema:\n{schema_str}\n\nReturn ONLY JSON, no extra text."
     )
     sys_content = f"{system}\n\n{schema_instruction}" if system else schema_instruction
+    messages = _build_messages(sys_content, prompt)
 
     last_content: Optional[str] = None
     for _ in range(3):
@@ -144,10 +146,7 @@ def _deepseek_ask_json(model_id: str, prompt: str, schema: dict, system: Optiona
             model=model_id,
             max_tokens=4096,
             response_format={"type": "json_object"},
-            messages=[
-                {"role": "system", "content": sys_content},
-                {"role": "user", "content": prompt},
-            ],
+            messages=messages,
         )
         content = resp.choices[0].message.content
         last_content = content
@@ -166,25 +165,47 @@ def _deepseek_ask_json(model_id: str, prompt: str, schema: dict, system: Optiona
 def _ollama_llm_ask(model_id: str, prompt: str, system: Optional[str]) -> str:
     from ollama import chat
 
-    messages = []
-    if system:
-        messages.append({"role": "system", "content": system})
-    messages.append({"role": "user", "content": prompt})
-
-    response = chat(model=model_id, messages=messages)
+    response = chat(model=model_id, messages=_build_messages(system, prompt))
     return response["message"]["content"] or ""
 
 
 def _ollama_llm_ask_json(model_id: str, prompt: str, schema: dict, system: Optional[str]) -> LLM_O:
     from ollama import chat
-    messages = []
-    if system:
-        messages.append({"role": "system", "content": system})
-    messages.append({"role": "user", "content": prompt})
 
-    response = chat(model=model_id, messages=messages, format=schema)
+    response = chat(model=model_id, messages=_build_messages(system, prompt), format=schema)
     return json.loads(response["message"]["content"] or "")
 
+
+
+# Provider registry
+# OpenAI and xAI speak the same wire protocol, differing only in the API-key
+# env var and base URL. The env var is read lazily (inside the closures) so
+# importing this module never requires keys for providers you don't use.
+def _make_openai_text(env_var: str, base_url: Optional[str]):
+    def handler(model_id: str, prompt: str, system: Optional[str]) -> str:
+        return _openai_ask(model_id, os.environ[env_var], base_url, prompt, system)
+    return handler
+
+
+def _make_openai_json(env_var: str, base_url: Optional[str]):
+    def handler(model_id: str, prompt: str, schema: dict, system: Optional[str]) -> LLM_O:
+        return _openai_ask_json(model_id, os.environ[env_var], base_url, prompt, schema, system)
+    return handler
+
+
+# provider -> (text_handler, json_handler)
+#   text_handler(model_id, prompt, system) -> str
+#   json_handler(model_id, prompt, schema, system) -> LLM_O
+_PROVIDERS: dict[str, tuple] = {
+    "claude":   (_claude_ask, _claude_ask_json),
+    "openai":   (_make_openai_text("OPENAI_API_KEY", None),
+                 _make_openai_json("OPENAI_API_KEY", None)),
+    "xai":      (_make_openai_text("XAI_API_KEY", "https://api.x.ai/v1"),
+                 _make_openai_json("XAI_API_KEY", "https://api.x.ai/v1")),
+    "gemini":   (_gemini_ask, _gemini_ask_json),
+    "deepseek": (_deepseek_ask, _deepseek_ask_json),
+    "ollama":   (_ollama_llm_ask, _ollama_llm_ask_json),
+}
 
 
 # Routing helpers
@@ -219,21 +240,11 @@ def ask(model: str, prompt: str, system: Optional[str] = None) -> str:
         KeyError:   If the required API key env var is not set.
     """
     provider, model_id = _resolve(model)
-
-    if provider == "claude":
-        return _claude_ask(model_id, prompt, system)
-    if provider == "openai":
-        return _openai_ask(model_id, os.environ["OPENAI_API_KEY"], None, prompt, system)
-    if provider == "gemini":
-        return _gemini_ask(model_id, prompt, system)
-    if provider == "deepseek":
-        return _deepseek_ask(model_id, prompt, system)
-    if provider == "xai":
-        return _openai_ask(model_id, os.environ["XAI_API_KEY"], "https://api.x.ai/v1", prompt, system)
-    if provider == "ollama":
-        return _ollama_llm_ask(model_id, prompt, system)
-
-    raise ValueError(f"Unhandled provider: {provider!r}")
+    handlers = _PROVIDERS.get(provider)
+    if handlers is None:
+        raise ValueError(f"Unhandled provider: {provider!r}")
+    text_handler, _ = handlers
+    return text_handler(model_id, prompt, system)
 
 def ask_json(model: str, prompt: str, schema: dict, system: Optional[str] = None) -> LLM_O:
     """Send *prompt* to *model* and return the response as a parsed dict.
@@ -253,21 +264,11 @@ def ask_json(model: str, prompt: str, schema: dict, system: Optional[str] = None
         RuntimeError: If DeepSeek fails to return valid JSON after retries.
     """
     provider, model_id = _resolve(model)
-
-    if provider == "claude":
-        return _claude_ask_json(model_id, prompt, schema, system)
-    if provider == "openai":
-        return _openai_ask_json(model_id, os.environ["OPENAI_API_KEY"], None, prompt, schema, system)
-    if provider == "gemini":
-        return _gemini_ask_json(model_id, prompt, schema, system)
-    if provider == "deepseek":
-        return _deepseek_ask_json(model_id, prompt, schema, system)
-    if provider == "xai":
-        return _openai_ask_json(model_id, os.environ["XAI_API_KEY"], "https://api.x.ai/v1", prompt, schema, system)
-    if provider == "ollama":
-        return _ollama_llm_ask_json(model_id, prompt, schema, system)
-
-    raise ValueError(f"Unhandled provider: {provider!r}")
+    handlers = _PROVIDERS.get(provider)
+    if handlers is None:
+        raise ValueError(f"Unhandled provider: {provider!r}")
+    _, json_handler = handlers
+    return json_handler(model_id, prompt, schema, system)
 
 
 # Class-based convenience wrapper

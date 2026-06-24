@@ -5,6 +5,7 @@ import re
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from backend.parsers_and_generators.brace_utils import brace_balance
 from ..models import PlaceholderCreate, PlaceholderResize, PlaceholderResponse
 from .. import session_store
 
@@ -98,15 +99,35 @@ def _ranges_overlap(a_start: int, a_end: int, b_start: int, b_end: int) -> bool:
     return a_start < b_end and b_start < a_end
 
 
-def _brace_balance(text: str) -> int:
-    """Return net brace depth of *text* (positive = unclosed '{', negative = extra '}')."""
-    depth = 0
-    for ch in text:
-        if ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-    return depth
+def _tex_brace_warning(session: dict, text: str) -> str | None:
+    """Non-blocking advisory when a .tex selection has unbalanced braces."""
+    if session.get("file_format") != "tex":
+        return None
+    balance = brace_balance(text)
+    if balance > 0:
+        return (
+            f"Selection has {balance} unclosed '{{' — this may cause LaTeX rendering errors. "
+            "Consider adjusting your selection to exclude the opening brace(s)."
+        )
+    if balance < 0:
+        return (
+            f"Selection has {-balance} extra '}}' — this may cause LaTeX rendering errors. "
+            "Consider adjusting your selection to exclude the trailing brace(s)."
+        )
+    return None
+
+
+def _ph_response(ph: dict, warning: str | None = None) -> PlaceholderResponse:
+    """Build a PlaceholderResponse from a stored placeholder dict."""
+    return PlaceholderResponse(
+        key=ph["key"],
+        type=ph["type"],
+        selected_text=ph["selected_text"],
+        start_offset=ph["start_offset"],
+        end_offset=ph["end_offset"],
+        value=ph.get("value"),
+        warning=warning,
+    )
 
 
 @router.post("/placeholder", response_model=PlaceholderResponse)
@@ -134,19 +155,7 @@ async def add_placeholder(body: PlaceholderCreate):
     # For .tex files, flag selections with unbalanced curly braces.
     # This is non-blocking (placeholder is still created) but a warning is returned
     # so the frontend can show an amber advisory to the user.
-    tex_warning: str | None = None
-    if session.get("file_format") == "tex":
-        balance = _brace_balance(actual_text)
-        if balance > 0:
-            tex_warning = (
-                f"Selection has {balance} unclosed '{{' — this may cause LaTeX rendering errors. "
-                "Consider adjusting your selection to exclude the opening brace(s)."
-            )
-        elif balance < 0:
-            tex_warning = (
-                f"Selection has {-balance} extra '}}' — this may cause LaTeX rendering errors. "
-                "Consider adjusting your selection to exclude the trailing brace(s)."
-            )
+    tex_warning = _tex_brace_warning(session, actual_text)
 
     # Check for overlapping placeholders
     for existing_ph in session["placeholders"].values():
@@ -182,15 +191,7 @@ async def add_placeholder(body: PlaceholderCreate):
         value=body.value,
     )
 
-    return PlaceholderResponse(
-        key=ph["key"],
-        type=ph["type"],
-        selected_text=ph["selected_text"],
-        start_offset=ph["start_offset"],
-        end_offset=ph["end_offset"],
-        value=ph.get("value"),
-        warning=tex_warning,
-    )
+    return _ph_response(ph, warning=tex_warning)
 
 
 @router.patch("/placeholder/{session_id}/reorder")
@@ -253,19 +254,7 @@ async def resize_placeholder(session_id: str, key: str, body: PlaceholderResize)
     cur_val = current.get("value")
     new_val = new_text if (cur_val is not None and cur_val == current.get("selected_text")) else None
 
-    tex_warning: str | None = None
-    if session.get("file_format") == "tex":
-        balance = _brace_balance(new_text)
-        if balance > 0:
-            tex_warning = (
-                f"Selection has {balance} unclosed '{{' — this may cause LaTeX rendering errors. "
-                "Consider adjusting your selection to exclude the opening brace(s)."
-            )
-        elif balance < 0:
-            tex_warning = (
-                f"Selection has {-balance} extra '}}' — this may cause LaTeX rendering errors. "
-                "Consider adjusting your selection to exclude the trailing brace(s)."
-            )
+    tex_warning = _tex_brace_warning(session, new_text)
 
     ph = session_store.resize_placeholder(
         session_id=session_id,
@@ -276,15 +265,7 @@ async def resize_placeholder(session_id: str, key: str, body: PlaceholderResize)
         value=new_val,
     )
 
-    return PlaceholderResponse(
-        key=ph["key"],
-        type=ph["type"],
-        selected_text=ph["selected_text"],
-        start_offset=ph["start_offset"],
-        end_offset=ph["end_offset"],
-        value=ph.get("value"),
-        warning=tex_warning,
-    )
+    return _ph_response(ph, warning=tex_warning)
 
 
 @router.patch("/placeholder/{session_id}/{key}/rename")
@@ -300,14 +281,7 @@ async def rename_placeholder(session_id: str, key: str, new_key: str):
         raise HTTPException(404, f"Placeholder '{key}' not found")
     except ValueError as exc:
         raise HTTPException(409, str(exc))
-    return PlaceholderResponse(
-        key=ph["key"],
-        type=ph["type"],
-        selected_text=ph["selected_text"],
-        start_offset=ph["start_offset"],
-        end_offset=ph["end_offset"],
-        value=ph.get("value"),
-    )
+    return _ph_response(ph)
 
 
 @router.patch("/placeholder/{session_id}/{key}/type")
@@ -320,14 +294,7 @@ async def update_placeholder_type(session_id: str, key: str, new_type: str):
         raise HTTPException(404, "Session not found")
     except KeyError:
         raise HTTPException(404, f"Placeholder '{key}' not found")
-    return PlaceholderResponse(
-        key=ph["key"],
-        type=ph["type"],
-        selected_text=ph["selected_text"],
-        start_offset=ph["start_offset"],
-        end_offset=ph["end_offset"],
-        value=ph.get("value"),
-    )
+    return _ph_response(ph)
 
 
 @router.delete("/placeholder/{session_id}/{key}")

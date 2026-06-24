@@ -21,34 +21,13 @@ from pathlib import Path
 if sys.stdout.encoding != "utf-8":
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 
+from backend.constants import TEMPLATE_MAP
+from backend.parsers_and_generators.context_helpers import resolve_placeholders
+
 GATEWAY_DIR = Path(__file__).resolve().parent
 PLACEHOLDERS_PATH = (GATEWAY_DIR / "fields.json").resolve()
 SENSITIVE_PATH = (GATEWAY_DIR / "sensitive_fields.json").resolve()
 OUTPUT_DIR = (GATEWAY_DIR / "outputs").resolve()
-
-TEMPLATE_MAP = {
-    "doc": "BASE_TEMPLATE.docx",
-    "tex": "BASE_TEMPLATE.tex.j2",
-    "txt": "BASE_TEMPLATE.txt.j2",
-}
-
-
-def _resolve_placeholders(ctx):
-    """Inline version -- avoids circular import issues."""
-    import re
-    pattern = re.compile(r"{{\s*([\w]+)\s*}}")
-    for _ in range(5):
-        changed = False
-        for k, v in list(ctx.items()):
-            if not isinstance(v, str):
-                continue
-            new_v = pattern.sub(lambda m: ctx.get(m.group(1), ""), v)
-            if new_v != v:
-                ctx[k] = new_v
-                changed = True
-        if not changed:
-            break
-    return ctx
 
 
 def _render_template(fmt: str) -> Path:
@@ -60,7 +39,7 @@ def _render_template(fmt: str) -> Path:
 
     ctx = dict(sensitive_fields)
     ctx.update(fields)
-    ctx = _resolve_placeholders(ctx)
+    ctx = resolve_placeholders(ctx)
     clean_context = {k: v for k, v in ctx.items() if v is not None}
 
     resume_name = TEMPLATE_MAP[fmt]

@@ -1,42 +1,17 @@
 from pathlib import Path
 from typing import Dict, Optional
 import re
-import time
 
-from .file_type_base import FileType, build_output_tag
+from .file_type_base import FileType
 from .jinja2_render import render_and_generate
+from .context_helpers import escape_chars
+from .brace_utils import brace_balance_errors
 from .tex_to_pdf import gen_pdf
-
-REMOVE_SENTINEL = "REMOVE_BULLETPOINT"
+from ..constants import REMOVE_SENTINEL
 
 _SENTINEL_RE = re.compile(
     r'\\resumeItem\s*\{' + re.escape(REMOVE_SENTINEL) + r'\}\s*\n?'
 )
-
-
-def _brace_balance_errors(tex_source: str) -> list[str]:
-    """Return human-readable messages for every brace imbalance found in *tex_source*.
-
-    Scans line-by-line. An unmatched '}' is reported immediately; unclosed '{'
-    groups are reported at end-of-file. Returns an empty list when braces balance.
-    Comments (% to end-of-line) are skipped so they don't count.
-    """
-    errors: list[str] = []
-    depth = 0
-    for lineno, line in enumerate(tex_source.splitlines(), 1):
-        # Strip LaTeX comments (% not preceded by \)
-        stripped = re.sub(r'(?<!\\)%.*', '', line)
-        for col, ch in enumerate(stripped, 1):
-            if ch == '{':
-                depth += 1
-            elif ch == '}':
-                depth -= 1
-                if depth < 0:
-                    errors.append(f"Line {lineno}, col {col}: extra '}}' (no matching '{{')")
-                    depth = 0  # reset and keep scanning for further issues
-    if depth > 0:
-        errors.append(f"End of file: {depth} unclosed '{{' group(s) remaining")
-    return errors
 
 
 def _remove_sentinel_lines(tex_path: Path) -> int:
@@ -56,16 +31,9 @@ class J2f(FileType):
         return j2_str
 
     def post_llm_process(self, context: Dict[str, str], metadata: Optional[dict] = None) -> Path:
-        self.context = context
+        self.context = escape_chars(context, self.res_path.name)
 
-        orig = self.res_path
-        timestamp = (metadata.get("timestamp") if metadata else None) or int(time.time())
-        suffix = (metadata.get("suffix") if metadata else None) or ""
-        tag = build_output_tag(metadata)
-        all_suffixes = "".join(orig.suffixes)
-        base_name = orig.name[:-len(all_suffixes)] if all_suffixes else orig.stem
-        new_name = Path(f"{base_name}{tag}_{timestamp}{suffix}{all_suffixes}").stem
-        working_copy = self.dest_dir / new_name
+        working_copy = self._build_output_path(metadata, strip_last_suffix=True)
 
         render_and_generate(self.context, self.res_path, working_copy)
 
@@ -75,7 +43,7 @@ class J2f(FileType):
 
         # Pre-flight brace check — surface a clear error before pdflatex sees it.
         tex_source = working_copy.read_text(encoding="utf-8")
-        brace_errors = _brace_balance_errors(tex_source)
+        brace_errors = brace_balance_errors(tex_source)
         if brace_errors:
             summary = "; ".join(brace_errors[:3])
             if len(brace_errors) > 3:

@@ -35,7 +35,7 @@ def get_LLM_I_str() -> str:
 
 def get_LLM_O_str() -> str:    
     hints = get_type_hints(LLM_O)
-    a   = "LLM_I(TypedDict):\n"
+    a   = "LLM_O(TypedDict):\n"
     b   = "\n".join(f"{k}: {hints[k].__name__}" for k in hints)
     c   = "\n"
     return a+b+c
